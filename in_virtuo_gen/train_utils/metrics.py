@@ -55,8 +55,6 @@ def ids_to_smiles(
                     valid_unique_indices.append(i)
                 valid_smiles.append(smiles)
                 valid_indices.append(i)
-
-
             else:
                 # Use a placeholder error message if needed
                 invalid_tokens.append(ids)

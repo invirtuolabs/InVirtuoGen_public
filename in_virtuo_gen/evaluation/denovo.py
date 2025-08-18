@@ -136,7 +136,7 @@ def scan_quality_vs_diversity_one_seed(
                     already_smiles=already_smiles,
 
                 )
-                _, smiles, metrics = evaluate_smiles(
+                valid_indices, smiles, metrics = evaluate_smiles(
                     samples, model.tokenizer,
                     return_values=True,
                     exclude_salts=True,
@@ -144,8 +144,13 @@ def scan_quality_vs_diversity_one_seed(
                 results[(T, r)] = {"quality": float(metrics["quality"]), "diversity": float(metrics["diversity"])}
                 if data_outpath:
                     with open(os.path.join(data_outpath, f"{T}_{r}.smiles"), "w") as f:
-                        for sm in smiles:
-                            f.write(sm + "\n")
+                        for i, sm in enumerate(smiles):
+                            if i in valid_indices:
+                                f.write(sm + "\n")
+                    with open(os.path.join(data_outpath, f"{T}_{r}.invalid"), "w") as f:
+                        for i, sm in enumerate(smiles):
+                            if i not in valid_indices:
+                                f.write(sm + "\n")
     return results
 
 
