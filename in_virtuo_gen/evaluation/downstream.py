@@ -350,7 +350,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Device setup
-    device = torch.device(args.device)
+    device = f"cuda:{args.device}" if len(args.device)==1 else args.device
+    device = torch.device(device)
 
     # Adjust settings for fast mode
     args.num_samples_eval = 100
