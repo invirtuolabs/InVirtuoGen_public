@@ -247,7 +247,7 @@ class MolecularDesign:
         # Parse device type for autocast
         device_type = "cuda" if "cuda" in str(device) else "cpu"
 
-        with torch.autocast(device_type, dtype=torch.float16, enabled=True):
+        with torch.autocast(device_type, dtype=torch.float16, enabled=device_type == "cuda"):
             # Process in larger batches for efficiency
             batch_size = params.get('gen_batch_size', 100)
 
@@ -346,11 +346,11 @@ if __name__ == "__main__":
     parser.add_argument("--noise", default=0, type=float)
     parser.add_argument("--unmasking_noise", default=4.5, type=float)
     parser.add_argument("--start_t", default=0.0, type=float)
-    parser.add_argument("--device", default=0)
+    parser.add_argument("--device", default="cuda:0")
     args = parser.parse_args()
 
     # Device setup
-    device = f"cuda:{args.device}" if torch.cuda.is_available() else "cpu"
+    device = torch.device(args.device)
 
     # Adjust settings for fast mode
     args.num_samples_eval = 100
@@ -532,7 +532,7 @@ if __name__ == "__main__":
         generated_smiles_dict={"InVirtuoGen": smiles_dict[task]},
         num_samples_per_frag=5,  # e.g. if you generated 100 samples per motif
         num_random_frags=min(1, len(frags_dict[task])) if task != "denovo" else 3,
-        num_generated=4,
+        num_generated=5,
         title=f"{task.replace('superstructure', 'Superstructure Design').replace('decoration', 'Scaffold Decoration').replace('linker', 'Linker Design').replace('motif', 'Motif Extension')}", # Samples
         outpath=f"plots/downstream/samples/{task}_samples.pdf",
         format="pdf",

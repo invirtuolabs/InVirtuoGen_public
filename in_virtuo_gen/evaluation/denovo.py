@@ -118,7 +118,7 @@ def scan_quality_vs_diversity_one_seed(
     results = {}
     device = model.device
     print(f"Sampling for {model_name}, device {device}")
-    with torch.autocast(device.type, dtype=torch.float16):
+    with torch.autocast(device.type, dtype=torch.float16, enabled = device.type == "cuda"):
         with torch.no_grad():
             for T, r in tqdm(pairs, desc=f"{model_name} sampling"):
                 samples = model.sample(
@@ -208,7 +208,7 @@ def load_aggregates(json_root, dt):
 def main():
     parser = argparse.ArgumentParser(description="Scan (T, r) over multiple dt values, aggregate mean±std, plot.")
     parser.add_argument("--checkpoint_paths", type=str, required=False, help="Checkpoint path")
-    parser.add_argument("--device", type=int, default=0)
+    parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--dt", nargs="+", type=float, default=[0.01], help="One or more dt values")
     parser.add_argument("--num_samples", type=int, default=1000)
     parser.add_argument("--no_temperature_scaling", action="store_true")
@@ -222,7 +222,7 @@ def main():
     parser.add_argument("--json_root", type=str, default=None, help="Root folder with saved JSONs (defaults to outdir/json_{tag})")
     args = parser.parse_args()
 
-    device = torch.device(f"cuda:{args.device}")
+    device = torch.device(args.device)
     temperature_scaling = not args.no_temperature_scaling
     pairs = [(1, 0), (1, 1), (1, 2), (2, 4),  (3, 4), (3,5), (3,6)]
     out_pdf = os.path.join(args.outdir, f"quality_vs_diversity_{args.tag}.pdf")
@@ -251,7 +251,7 @@ def main():
     if not args.checkpoint_paths:
         raise ValueError("checkpoint_paths is required unless --plot_only is set")
 
-    device = torch.device(f"cuda:{args.device}")
+
 
     for dt in args.dt:
         seed_results = []

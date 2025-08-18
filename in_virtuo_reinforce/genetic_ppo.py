@@ -165,7 +165,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         *args,
         **kwargs,
     ):
-        base_optimizer_kwargs = {"device": f"cuda:{kwargs.get('device', 0)}", "output_dir": kwargs.get("output_dir", "target_prop_opt")}
+        base_optimizer_kwargs = {"device": kwargs.get("device", "cpu"), "output_dir": kwargs.get("output_dir", "target_prop_opt")}
 
         # Remove base optimizer args from kwargs to avoid conflicts
         filtered_kwargs = {k: v for k, v in kwargs.items() if k not in ["device", "output_dir"] or k in OptimizerConfig.__dataclass_fields__}
@@ -181,7 +181,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
 
         wandb.run.log_code("./")  # type: ignore[attr-defined]
         # Initialize instance variables from config
-        self.device = f"cuda:{self.config.device}"
+        self.device = torch.device(self.config.device)
         self.sa, self.qed, self.qed_ga, self.sa_ga, self.ga_scores, self.ga_tries = [], [], [], [], [], []
         self.global_step = 0
         self.stop_counter = 0
@@ -549,7 +549,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             prompts = None
             for i in range(num_samples):
                 n_oracle.append(self.bandit.select_length())
-        with torch.autocast("cuda", dtype=torch.float16, enabled=True):
+        with torch.autocast(self.device, dtype=torch.float16, enabled=self.device.type == "cuda"):
             all_seqs, all_x_0 = self.model.sample(
                 prompt=prompts,
                 num_samples=num_samples,
@@ -715,7 +715,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt", type=str, default="invirtuo_gen.ckpt")
-    parser.add_argument("--device", type=int, default=0)
+    parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--oracle", type=str, default="albuterol_similarity")
     parser.add_argument("--start_t", type=float, default=0.0)
     # parser.add_argument("--mutation_rate", type=float, default=0.1)
@@ -753,10 +753,10 @@ if __name__ == "__main__":
     parser.add_argument("--num_seeds", type=int, default=3)
     # Then in your config setup, add:
     args = parser.parse_args()
-
+    device = f"cuda:{args.device}" if len(args.device)==1 else args.device
     # Convert args to dict for easy passing
     config_dict = dict(vars(args))
-    config_dict["device"] = args.device
+    config_dict["device"] = device
     config_dict.pop("start_task")
     config_dict.pop("end_task")
     num_seeds=config_dict.pop("num_seeds")

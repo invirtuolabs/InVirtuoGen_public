@@ -39,6 +39,7 @@ def main():
     else:
         raise ValueError(f"Unknown model: {args.model}")
     model.eval()
+    
     model.to(args.accelerator)
 
     gen_kwargs = {"num_samples": args.num_samples}
