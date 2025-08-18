@@ -426,7 +426,10 @@ class InVirtuoFM(InVirtuoBase):
                     t = t + dt
                     if return_trajectory:
                         trajectory.append(x_t.cpu().tolist())
+                if force_prompt:
+                    x_t[prompt_mask] = prompt_slice[prompt_mask[:, : prompt.shape[1]]]
                 samples.extend(x_t.cpu().tolist())
+
         if not return_trajectory and not return_uni:
             return samples
         elif return_uni:
