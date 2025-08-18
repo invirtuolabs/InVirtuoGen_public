@@ -1,7 +1,7 @@
 # InVirtuoGEN Benchmark
 
 This repository contains code and pretrained checkpoints for **InVirtuoGEN**, a discrete flow model for fragment-based molecular generation and optimization.
-
+![DeNovo Generation - Quality_vs_Diversity](plots/quality_vs_diversity.png)
 ## Checkpoints
 
 - `invirtuo_big.ckpt`
