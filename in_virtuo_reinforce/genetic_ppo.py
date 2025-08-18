@@ -215,7 +215,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
                 K=1 #if self.config.use_prescreen else 2,
             )
 
-        self.model_opt = optim.Adam(self.model.parameters(), lr=1e-5)
+        self.model_opt = optim.Adam(self.model.parameters(), lr=1e-4)
         self.lr_scheduler = get_cosine_schedule_with_warmup(self.model_opt, num_warmup_steps=0, num_training_steps=10000 * self.config.num_reinforce_steps // self.config.offspring_size * 2)
 
         # Initialize trainer
@@ -549,7 +549,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             prompts = None
             for i in range(num_samples):
                 n_oracle.append(self.bandit.select_length())
-        with torch.autocast(self.device, dtype=torch.float16, enabled=self.device.type == "cuda"):
+        with torch.autocast(self.device.type, dtype=torch.float16, enabled=self.device.type == "cuda"):
             all_seqs, all_x_0 = self.model.sample(
                 prompt=prompts,
                 num_samples=num_samples,
