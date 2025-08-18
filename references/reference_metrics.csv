@@ -1,0 +1,13 @@
+category,method,validity,uniqueness,quality,diversity,distance
+denovo,SAFE-GPT,94.0,100.0,54.7,0.879,
+denovo,GenMol,99.8,99.6,75.0,0.882,
+motif,SAFE-GPT,96.1,66.8,18.6,0.562,0.665
+motif,GenMol,77.2,77.8,27.5,0.617,0.682
+linker,SAFE-GPT,76.6,82.5,21.7,0.545,0.541
+linker,GenMol,100.0,83.7,21.9,0.547,0.563
+superstructure,SAFE-GPT,95.7,83.0,14.3,0.573,0.776
+superstructure,GenMol,98.2,78.3,33.3,0.574,0.757
+morphing,GenMol,100.0,83.7,21.9,0.547,0.563
+morphing,SAFE-GPT,58.9,70.4,16.7,0.514,0.528
+decoration,SAFE-GPT,97.7,74.7,10.0,0.575,0.625
+decoration,GenMol,96.8,78.0,29.6,0.576,0.65

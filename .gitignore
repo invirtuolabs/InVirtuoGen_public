@@ -1,0 +1,13 @@
+*/__pycache__/
+*.pdbqt
+in_virtuo_reinforce/docking
+in_virtuo_reinforce/docking_utils.py
+in_virtuo_reinforce/ppo_docking.py
+*.ipynb
+in_virtuo_reinforce/vocab
+*.pyc
+*.pyo
+wandb
+plots
+results
+*.ckpt
