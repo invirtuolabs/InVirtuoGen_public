@@ -9,8 +9,9 @@ from lightning.pytorch.utilities.types import EVAL_DATALOADERS, TRAIN_DATALOADER
 from torch.nn.utils.rnn import pad_sequence
 from transformers import  PreTrainedTokenizerFast, get_cosine_schedule_with_warmup
 from tokenizers import Tokenizer
-
+from ..train_utils.param_groups import get_param_groups
 from ..train_utils.metrics import evaluate_smiles
+
 from ..utils.fragments import bridge_smiles_fragments
 from ..preprocess.preprocess_tokenize import custom_decode_sequence
 from ..utils.fragments import bridge_smiles_fragments
