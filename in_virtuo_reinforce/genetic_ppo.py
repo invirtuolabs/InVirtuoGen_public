@@ -714,7 +714,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ckpt", type=str, default="invirtuo_gen.ckpt")
+    parser.add_argument("--ckpt", type=str, default="checkpoints/invirtuo_gen.ckpt")
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--oracle", type=str, default="albuterol_similarity")
     parser.add_argument("--start_t", type=float, default=0.0)
