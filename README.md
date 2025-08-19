@@ -55,6 +55,9 @@ python -m in_virtuo_gen.evaluation.denovo \
 
 Design molecules containing specific fragments while optimizing properties.
 ![Motif Extension](motif_samples.png)
+![Linker Design](linker_samples.png)
+![Scaffold Decoration](decoration_samples.png)
+![Superstructure Generation](superstructure_samples.png)
 ```bash
 python -m in_virtuo_gen.evaluation.downstream \
     --model_path checkpoints/invirtuo_gen.ckpt \
@@ -171,7 +174,7 @@ python -m in_virtuo_reinforce.genetic_ppo \
 ## 📧 Contact
 
 For questions or collaboration opportunities:
-- **Benno Kaech** - InVirtuoLaboratories SA benno@invrtuolabs.com
+- **Benno Kaech** - In Virtuo Laboratories SA benno@invrtuolabs.com
 
 
 ## 📜 License
