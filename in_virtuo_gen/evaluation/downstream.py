@@ -381,7 +381,7 @@ def merge_seed_results(seed_results_list, tasks):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_paths", nargs="*", default=["important_checkpoints/invirtuo_llm.ckpt"], required=True)
+    parser.add_argument("--model_paths", type=str, default="invirtuo_gen.ckpt", required=True)
     parser.add_argument("--motif", action="store_true")
     parser.add_argument("--linker", action="store_true")
     parser.add_argument("--superstructure", action="store_true")
@@ -457,16 +457,13 @@ if __name__ == "__main__":
     }
 
     print("Loading model...")
-    try:
-        model = InVirtuoFM.load_from_checkpoint(
-            args.model_paths[0],
-            tokenizer_path="tokenizer/smiles_new.json",
-            map_location="cpu"
-        ).to(device)
-        model.eval()
-    except Exception as e:
-        print(f"Error loading model: {e}")
-        raise
+    model = InVirtuoFM.load_from_checkpoint(
+        args.model_paths,
+        tokenizer_path="tokenizer/smiles_new.json",
+        map_location="cpu"
+    ).to(device)
+    model.eval()
+
 
     design = MolecularDesign(model, model.tokenizer)
     valid_indices_dict = {}
