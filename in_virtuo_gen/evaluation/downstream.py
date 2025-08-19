@@ -219,16 +219,16 @@ def write_latex_tables(results: dict, outpath: str = "comparison_tables.tex", in
 
                 # Format with or without std
                 if include_std and std_val > 0:
-                    fmt = f"{val:.2f} \\pm {std_val:.2f}"
+                    fmt = f"${val:.2f} \\pm {std_val:.2f}$"
                 else:
-                    fmt = f"{val:.2f}"
+                    fmt = f"${val:.2f}$"
 
                 # Bold if within the best model's propagated std
                 if metric in best_avg_metric:
                     best_val = best_avg_metric[metric]
                     best_std = best_avg_std[metric]
                     if val == best_val or (best_std > 0 and abs(val - best_val) <= best_std):
-                        fmt = f"$\\mathbf{{{fmt}}}$"
+                        fmt = f"$\\mathbf{{{fmt[1:-1]}}}$"
 
                 row.append(fmt)
 
