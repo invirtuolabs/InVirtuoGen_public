@@ -468,16 +468,16 @@ class InVirtuoBase(pl.LightningModule):
                 - Diversity score
                 - Quality score
         """
-        gen_kwargs["num_samples"] = int(1.1*gen_kwargs["num_samples"])
+        num_samples = int(1.1*gen_kwargs["num_samples"])
 
         generated_ids = self.sample(**gen_kwargs)
         smiles = self.convert_to_smiles(generated_ids) # type: ignore[attr-defined]
         if len(generated_ids) == 0:
             raise ValueError("No valid SMILES generated.")
-        if len(smiles) < gen_kwargs["num_samples"]:
-            gen_kwargs["num_samples"] = int((gen_kwargs["num_samples"]-len(smiles))*2)
-            generated_ids = self.sample(**gen_kwargs)
-            smiles.extend(self.convert_to_smiles(generated_ids)[gen_kwargs["num_samples"]-len(smiles):]) # type: ignore[attr-defined]
-        return smiles
+        if len(smiles) <num_samples:
+            num_samples = int((num_samples-len(smiles))*2)
+            generated_ids = self.sample(num_samples=num_samples)
+            smiles.extend(self.convert_to_smiles(generated_ids)[num_samples-len(smiles):]) # type: ignore[attr-defined]
+        return smiles[:gen_kwargs["num_samples"]]
 
 
