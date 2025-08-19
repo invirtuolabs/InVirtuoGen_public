@@ -11,9 +11,52 @@ from ..preprocess.generate_fragments import process_smiles
 from ..train_utils.metrics import evaluate_smiles
 from ..utils.fragments import remove_stereochemistry
 from .plot_results import visualize_generated_molecules
+import datamol as dm
+from rdkit.Chem.rdChemReactions import ReactionFromSmarts
+from typing import Optional
+import random
+from rdkit import Chem
+
+import re
+
+def enumerate_attach_points(smi: str) -> str:
+    counter = {"i": 0}
+    def repl(_):
+        counter["i"] += 1
+        return f"[{counter['i']}*]"
+    return re.sub(r"\[\*\]", repl, smi)
+
 
 torch.set_float32_matmul_precision("high")
+def list_individual_attach_points(mol: dm.Mol, depth: Optional[int] = None):
+    """List all individual attachement points.
 
+    We do not allow multiple attachment points per substitution position.
+
+    Args:
+        mol: molecule for which we need to open the attachment points
+
+    """
+    ATTACHING_RXN = ReactionFromSmarts("[*;h;!$([*][#0]):1]>>[*:1][*]")
+    mols = [mol]
+    curated_prods = set()
+    num_attachs = len(mol.GetSubstructMatches(dm.from_smarts("[*;h:1]"), uniquify=True))
+    depth = depth or 1
+    depth = min(max(depth, 1), num_attachs)
+    while depth > 0:
+        prods = set()
+        for mol in mols:
+            mol = dm.to_mol(mol)
+            for p in ATTACHING_RXN.RunReactants((mol,)):
+                    m = dm.sanitize_mol(p[0])
+                    sm = dm.to_smiles(m, canonical=True)
+                    sm = dm.reactions.add_brackets_to_attachment_points(sm)
+                    prods.add(dm.reactions.convert_attach_to_isotope(sm, as_smiles=True))
+
+        curated_prods.update(prods)
+        mols = prods
+        depth -= 1
+    return list(curated_prods)
 
 def write_latex_tables(results: dict, outpath: str = "comparison_tables.tex", include_std: bool = True):
     """
@@ -239,7 +282,7 @@ class MolecularDesign:
         self.max_length = max_length
         self.device = next(model.parameters()).device if next(model.parameters(), None) is not None else torch.device("cpu")
 
-    def prompt_model(self, prompt_ids: list, params: dict, n=None, device="cuda", num_samples=100):
+    def prompt_model(self, prompt_ids: list, params: dict, n=None, device="cuda", num_samples=100, superstructure=False):
         """Generate samples with optimized batching."""
         ids = []
         self.model = self.model.to(device)
@@ -250,25 +293,36 @@ class MolecularDesign:
         with torch.autocast(device_type, dtype=torch.float16, enabled=device_type == "cuda"):
             # Process in larger batches for efficiency
             batch_size = params.get('gen_batch_size', 100)
+            if not superstructure:
+                for i, p in enumerate(prompt_ids):
+                    # Generate all samples for this prompt at once if possible
+                    remaining_samples = num_samples
+                    prompt_samples = []
 
-            for i, p in enumerate(prompt_ids):
-                # Generate all samples for this prompt at once if possible
-                remaining_samples = num_samples
-                prompt_samples = []
+                    while remaining_samples > 0:
+                        current_batch = min(batch_size, remaining_samples)
+                        samples = self.model.sample(
+                            prompt=p.to(self.device),
+                            num_samples=current_batch,
+                            n=n[i] if n is not None else None,
+                            force_prompt=True,
+                            **params
+                        )
+                        prompt_samples.extend(samples)
+                        remaining_samples -= current_batch
 
-                while remaining_samples > 0:
-                    current_batch = min(batch_size, remaining_samples)
-                    samples = self.model.sample(
-                        prompt=p.to(self.device),
-                        num_samples=current_batch,
+                    ids.extend(prompt_samples[:num_samples])  # Ensure exactly num_samples
+            else:
+                for i in range(len(prompt_ids)//batch_size+1):
+                    if len(prompt_ids[i*batch_size:(i+1)*batch_size])==0:
+                        break
+                    ids.extend(self.model.sample(
+                        prompt=torch.nn.utils.rnn.pad_sequence(  prompt_ids[i*batch_size:(i+1)*batch_size], batch_first=True, padding_value=self.model.pad_token_id).to(self.device),
+                        num_samples=batch_size,
                         n=n[i] if n is not None else None,
                         force_prompt=True,
                         **params
-                    )
-                    prompt_samples.extend(samples)
-                    remaining_samples -= current_batch
-
-                ids.extend(prompt_samples[:num_samples])  # Ensure exactly num_samples
+                    ))
 
         return ids
 
@@ -328,8 +382,8 @@ def merge_seed_results(seed_results_list, tasks):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_paths", nargs="*", default=["important_checkpoints/invirtuo_llm.ckpt"], required=True)
-    parser.add_argument("--motif_extension", action="store_true")
-    parser.add_argument("--linker_design", action="store_true")
+    parser.add_argument("--motif", action="store_true")
+    parser.add_argument("--linker", action="store_true")
     parser.add_argument("--superstructure", action="store_true")
     parser.add_argument("--decoration", action="store_true")
     parser.add_argument("--num_seeds", type=int, default=3)
@@ -372,11 +426,19 @@ if __name__ == "__main__":
     # Task selection
     tasks = ["motif", "linker", "superstructure", "decoration"]
     if not args.all:
-        tasks = [t for t in tasks if getattr(args, f"{t}_{'extension' if t == 'motif' else 'design' if t != 'decoration' else t}")]
+        tasks = [t for t in tasks if getattr(args, t)]
 
     # Preprocess fragments
     for task in tasks:
         df[task] = df[task].apply(process_fragments)
+        if task == "superstructure":
+            superstructure_frags = []
+            temp_df = pd.read_csv("references/fragments.csv")
+            for i in range(10):
+                frags= list_individual_attach_points(Chem.MolFromSmiles(remove_stereochemistry(temp_df["superstructure_generation"].values[i])), depth=3)
+                for _ in range(100):
+                    superstructure_frags.append(enumerate_attach_points(random.choice(frags)))
+
     orig_frags = df["original_smiles"].apply(process_smiles).values.tolist()
 
     # Optimized sampling parameters
@@ -394,7 +456,6 @@ if __name__ == "__main__":
         "top_k": args.top_k,
     }
 
-    # Load model ONCE outside the seed loop
     print("Loading model...")
     try:
         model = InVirtuoFM.load_from_checkpoint(
@@ -420,9 +481,14 @@ if __name__ == "__main__":
     # Pre-tokenize all task prompts (do once)
     task_prompts = {}
     for task in tasks:
-        frags_list = df[task].apply(lambda x: " ".join(x) + " ").values.tolist()
-        frags_dict[task] = frags_list
-        task_prompts[task] = design.tokenize_and_flatten(frags_list, model.tokenizer, 150)
+        if task == "superstructure":
+            frags_list = superstructure_frags
+            task_prompts[task] = design.tokenize_and_flatten(frags_list, model.tokenizer, 150)
+            frags_dict[task] = temp_df["superstructure_generation"].values.tolist()
+        else:
+            frags_list = df[task].apply(lambda x: " ".join(x) + " ").values.tolist()
+            frags_dict[task] = frags_list
+            task_prompts[task] = design.tokenize_and_flatten(frags_list, model.tokenizer, 150)
 
     # Run seed experiments
     results_per_seed = []
@@ -446,21 +512,27 @@ if __name__ == "__main__":
                 n=frags_n,
                 device=device,
                 num_samples=samples_per_prompt,
+                superstructure=task == "superstructure"
             )
 
             # Evaluate in parallel where possible
             metrics_list = []
             smiles_list = []
             for i in range(len(task_prompts[task])):
+
                 start_idx = i * samples_per_prompt
                 end_idx = (i + 1) * samples_per_prompt
-
+                if task == "superstructure":
+                    if start_idx>=len(ids):
+                        break
                 indices, smile, metric = evaluate_smiles(
                     ids[start_idx:end_idx],
                     model.tokenizer,
                     return_values=True,
                     exclude_salts=exclude_salts,
                 )
+
+
                 metrics_list.append(metric)
                 smiles_list.append(smile)
                 if seed == 0:

@@ -11,7 +11,7 @@ matplotlib==3.10.5
 numpy==1.26.4
 openbabel-wheel==3.1.1.22
 packaging==24.2
-pandas==2.3.1
+pandas==2.1.4
 pip==24.2
 Pillow==11.3.0
 psutil==6.1.1
