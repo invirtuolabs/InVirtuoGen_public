@@ -221,8 +221,8 @@ def main():
     parser.add_argument("--plot_only", action="store_true", help="Read saved JSONs and only plot")
     parser.add_argument("--json_root", type=str, default=None, help="Root folder with saved JSONs (defaults to outdir/json_{tag})")
     args = parser.parse_args()
-
-    device = torch.device(args.device)
+    device = f"cuda:{args.device}" if len(args.device) == 1 else args.device
+    device = torch.device(device)
     temperature_scaling = not args.no_temperature_scaling
     pairs = [(1, 0), (1, 1), (1, 2), (2, 4),  (3, 4), (3,5), (3,6)]
     out_pdf = os.path.join(args.outdir, f"quality_vs_diversity_{args.tag}.pdf")
