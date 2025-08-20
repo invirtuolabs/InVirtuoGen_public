@@ -54,10 +54,10 @@ python -m in_virtuo_gen.evaluation.denovo \
 ### 2. Fragment-Constrained Generation
 
 Design molecules containing specific fragments while optimizing properties.
-![Motif Extension](motif_samples.png)
-![Linker Design](linker_samples.png)
-![Scaffold Decoration](decoration_samples.png)
-![Superstructure Generation](superstructure_samples.png)
+![Motif Extension](plots/downstream/motif_samples.png)
+![Linker Design](plots/downstream/linker_samples.png)
+![Scaffold Decoration](plots/downstream/decoration_samples.png)
+![Superstructure Generation](plots/downstream/superstructure_samples.png)
 ```bash
 python -m in_virtuo_gen.evaluation.downstream \
     --model_path checkpoints/invirtuo_gen.ckpt \
