@@ -80,7 +80,7 @@ def tokenize_dataset(
         remove_columns="fragments",
     )
     if use_datasets:
-        dataset.save_to_disk(output_path, num_proc=num_proc)
+        dataset.save_to_disk(output_path.replace(".npy", ""), num_proc=num_proc)
     else:
         save_to_memmap(dataset, output_path, max_length,dtype="uint8" if int8 else "uint16")
 
