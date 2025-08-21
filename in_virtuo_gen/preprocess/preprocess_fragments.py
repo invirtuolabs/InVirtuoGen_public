@@ -43,8 +43,7 @@ def process_batch(examples, verbose=True):
         max_fragments = num_frags(smiles)
         if max_fragments > 1:
             # Choose num_fragments based on a random chance:
-            # 99% chance to use up to 4 fragments, otherwise up to 7.
-            num_fragments = min(max_fragments, 4) if random.random() < 0.99 else min(max_fragments, 7)
+            num_fragments = min(max_fragments, 7) #if random.random() < 0.99 else min(max_fragments, 7)
 
             # Attempt up to 1000 times to get a valid fragmentation
             found_match = False
@@ -72,13 +71,15 @@ def process_batch(examples, verbose=True):
             results["num_fragments"].append(num_fragments)
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         if verbose:
             print(f"Error processing SMILES {original_smiles}: {str(e)}")
 
     return results
 
 
-def process_smiles_dataset(input_path: str, output_path: str, batch_size: int = 10000, num_proc: int = 4):
+def process_smiles_dataset(input_path: str, output_path: str, batch_size: int = 10000, num_proc: int = 4, csv: bool = False):
     """
     Loads a dataset of SMILES strings, processes each SMILES entry by fragmentation,
     and saves the processed dataset to disk.
@@ -90,8 +91,11 @@ def process_smiles_dataset(input_path: str, output_path: str, batch_size: int = 
         num_proc (int, optional): Number of parallel processes to use. Default is 4.
     """
     print(f"Processing dataset from {input_path} to {output_path}")
-    dataset = load_dataset("text", data_files=input_path, split="train")
-    dataset = dataset.rename_column("text", "smiles")
+    if csv:
+        dataset = load_dataset("csv", data_files=input_path, split="train")
+    else:
+        dataset = load_dataset("text", data_files=input_path, split="train")
+        dataset = dataset.rename_column("text", "smiles")
     print(f"Loaded dataset with {len(dataset)} examples")
 
     processed_dataset = dataset.map(
@@ -122,7 +126,7 @@ def main():
     parser.add_argument("--output_path", type=str, required=True, help="Path to save the processed dataset.")
     parser.add_argument("--batch_size", type=int, default=10000, help="Batch size for processing.")
     parser.add_argument("--num_proc", type=int, default=40, help="Number of parallel processes.")
-
+    parser.add_argument('--csv', action='store_true', help='load from csv')
     args = parser.parse_args()
     process_smiles_dataset(**vars(args))
 
