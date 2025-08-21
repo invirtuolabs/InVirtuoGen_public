@@ -100,9 +100,13 @@ def main():
     if args.safe:
         tokenizer = Tokenizer.from_file("tokenizer/safe.json")
         pad_token_id = 3
+        end_token_id = 2
+        bos_token_id = 1
     else:
         tokenizer = PreTrainedTokenizerFast(tokenizer_file="tokenizer/smiles_new.json")
-        pad_token_id = tokenizer.encode("[PAD]")
+        pad_token_id = tokenizer.encode("[PAD]")[0]
+        end_token_id = tokenizer.encode("[EOS]")[0]
+        bos_token_id = tokenizer.encode("[BOS]")[0]
     output_folder = args.output_folder
     chunk_size = args.chunk_size
     bucket_step = args.bucket_step
@@ -128,7 +132,7 @@ def main():
             batch = dataset[chunk_start:chunk_end][args.dataset_column]
             chunk = np.array(batch).reshape(-1, max_length)
             # Compute effective length (number of tokens not equal to padding token 3).
-            lengths = np.count_nonzero(chunk != pad_token_id, axis=1)
+            lengths = np.count_nonzero((chunk != pad_token_id) & (chunk != end_token_id) & (chunk != bos_token_id), axis=1)
             valid = lengths > 0
             if not np.any(valid):
                 continue
@@ -159,7 +163,7 @@ def main():
                                     desc=f"Counting in {os.path.basename(input_file)}"):
                 chunk_end = min(chunk_start + chunk_size, len(data))
                 chunk = data[chunk_start:chunk_end]
-                lengths = np.count_nonzero(chunk != pad_token_id, axis=1)
+                lengths = np.count_nonzero((chunk != pad_token_id) & (chunk != end_token_id) & (chunk != bos_token_id), axis=1)
                 valid = lengths > 0
                 if not np.any(valid):
                     continue
@@ -245,7 +249,7 @@ def main():
             chunk_end = min(chunk_start + chunk_size, total_samples)
             batch = dataset[chunk_start:chunk_end][args.dataset_column]
             chunk = np.array(batch).reshape(-1, max_length)
-            lengths = np.count_nonzero(chunk != pad_token_id, axis=1)
+            lengths = np.count_nonzero((chunk != pad_token_id) & (chunk != end_token_id) & (chunk != bos_token_id), axis=1)
             valid = lengths > 0
             if not np.any(valid):
                 continue
@@ -291,7 +295,7 @@ def main():
                                     desc=f"Processing {os.path.basename(input_file)}"):
                 chunk_end = min(chunk_start + chunk_size, len(data))
                 chunk = data[chunk_start:chunk_end]
-                lengths = np.count_nonzero(chunk != pad_token_id, axis=1)
+                lengths = np.count_nonzero((chunk != pad_token_id) & (chunk != end_token_id) & (chunk != bos_token_id), axis=1)
                 valid = lengths > 0
                 if not np.any(valid):
                     continue
