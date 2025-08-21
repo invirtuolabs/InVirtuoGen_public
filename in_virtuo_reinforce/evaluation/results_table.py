@@ -24,7 +24,7 @@ for task in sorted(os.listdir(args.results_root)):
             if not file.startswith("results_"):
                 continue
             csv_path = os.path.join(task_dir, file)
-            break
+
     if not os.path.isfile(csv_path):
         print("not a file")
         continue
@@ -52,8 +52,8 @@ for run_idx in range(n_runs):
             run_sum += values[run_idx]
 
     sum_per_run.append(run_sum)
-    break
-
+    if not args.include_std:
+        break
 invirtuo_sum_mean = np.mean(sum_per_run)
 invirtuo_sum_std = np.std(sum_per_run, ddof=0)
 
