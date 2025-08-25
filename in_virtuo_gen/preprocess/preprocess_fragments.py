@@ -132,7 +132,9 @@ def main():
     parser.add_argument('--order_fragments', action='store_true', help='Order fragments by attachment points.')
     args = parser.parse_args()
     config = vars(args)
-    config["output_path"] = config["output_path"] + f"_max_frags_{config['num_max_fragments']}" + "_ordered" if config["order_fragments"] else ""
+    config["output_path"] = config["output_path"] + f"_max_frags_{config['num_max_fragments']}"
+    if config["order_fragments"]:
+        config["output_path"] += "_ordered"
     process_smiles_dataset(**config)
 
 
