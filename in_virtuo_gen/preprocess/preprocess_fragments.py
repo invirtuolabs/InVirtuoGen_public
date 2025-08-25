@@ -18,7 +18,7 @@ import random
 RDLogger.DisableLog("rdApp.*")
 
 
-def process_batch(examples, verbose=True, num_max_fragments=7, order_fragments=True):
+def process_batch(examples, verbose=True, num_max_fragments=7, order_fragments=False):
     """
     Processes a batch of SMILES strings by removing salts and stereochemistry,
     fragmenting molecules, and randomizing fragments if applicable.
@@ -79,7 +79,7 @@ def process_batch(examples, verbose=True, num_max_fragments=7, order_fragments=T
     return results
 
 
-def process_smiles_dataset(input_path: str, output_path: str, batch_size: int = 10000, num_proc: int = 4, csv: bool = False, num_max_fragments: int = 7):
+def process_smiles_dataset(input_path: str, output_path: str, batch_size: int = 10000, num_proc: int = 4, csv: bool = False, num_max_fragments: int = 7, order_fragments: bool = True):
     """
     Loads a dataset of SMILES strings, processes each SMILES entry by fragmentation,
     and saves the processed dataset to disk.
@@ -99,11 +99,12 @@ def process_smiles_dataset(input_path: str, output_path: str, batch_size: int = 
     print(f"Loaded dataset with {len(dataset)} examples")
 
     processed_dataset = dataset.map(
-        lambda x: process_batch(x, num_max_fragments=num_max_fragments),
+        lambda x: process_batch(x, num_max_fragments=num_max_fragments, order_fragments=order_fragments),
         batched=False,
         batch_size=batch_size,
         num_proc=num_proc,
         remove_columns="smiles",
+
     )
 
     print(f"Processed dataset with {len(processed_dataset)} examples")
