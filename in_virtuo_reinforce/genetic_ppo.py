@@ -520,32 +520,32 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             List of (sequence, score, smile) triples
         """
         B = int(self.config.first_pop_size * 1.1)  # generate more samples to ensure we have enough valid ones
+
+        n_oracle = [67 if self.config.oracle=="valsartan_smarts" and not self.config.use_prescreen else self.bandit.select_length() for _ in range(int(B))] #
+
+        samples, init_ids = self.model.sample(num_samples=B, temperature=1.0, noise=0.0, oracle=n_oracle, eta=1, return_uni=True, vocab_mask=self.vocab_mask,)
+        valid, smiles, _ = evaluate_smiles(
+            generated_ids=samples,
+            tokenizer=self.tokenizer,
+            return_values=True,
+            print_flag=False,
+            print_metrics=False,
+            exclude_salts=False,
+        )
+
+        # keep only the valid ones
+        samples = [torch.tensor(samples[i]) for i in valid][: self.config.first_pop_size]
+        init_ids = [torch.tensor(init_ids[i]) for i in valid][: self.config.first_pop_size]
+        n_oracle = [n_oracle[i] for i in valid][: self.config.first_pop_size]
+        smiles = [smiles[i] for i in valid][: self.config.first_pop_size]
         if self.config.use_prescreen:
             # 1. Load ZINC SMILES
             df = pd.read_csv("in_virtuo_reinforce/vocab/zinc250k.csv").sort_values(by=self.config.oracle, ascending=False)[: self.config.first_pop_size]
-            smiles = df["smiles"].values.tolist()
-            scores = df[self.config.oracle].values.tolist()
-            samples = [torch.tensor(self.tokenizer.encode(" ".join(decompose_smiles(sm, max_frags=self.config.max_frags)))) for sm in smiles]
-            init_ids = [torch.randint(4, 203, (len(s),)) for s in samples]
-        else:
-            n_oracle = [67 if self.config.oracle=="valsartan_smarts" else self.bandit.select_length() for _ in range(int(B))] #
-
-            samples, init_ids = self.model.sample(num_samples=B, temperature=1.0, noise=0.0, oracle=n_oracle, eta=1, return_uni=True, vocab_mask=self.vocab_mask,)
-            valid, smiles, _ = evaluate_smiles(
-                generated_ids=samples,
-                tokenizer=self.tokenizer,
-                return_values=True,
-                print_flag=False,
-                print_metrics=False,
-                exclude_salts=False,
-            )
-
-            # keep only the valid ones
-            samples = [torch.tensor(samples[i]) for i in valid][: self.config.first_pop_size]
-            init_ids = [torch.tensor(init_ids[i]) for i in valid][: self.config.first_pop_size]
-            n_oracle = [n_oracle[i] for i in valid][: self.config.first_pop_size]
-            smiles = [smiles[i] for i in valid][: self.config.first_pop_size]
-            scores = self.oracle(smiles)
+            smiles = df["smiles"].values.tolist() + smiles
+            scores = df[self.config.oracle].values.tolist() + scores
+            samples = [torch.tensor(self.tokenizer.encode(" ".join(decompose_smiles(sm, max_frags=self.config.max_frags)))) for sm in smiles] + samples
+            init_ids = [torch.randint(4, 203, (len(s),)) for s in samples] + init_ids
+        scores = self.oracle(smiles)
         self.scores.extend(scores)
         self.qed.extend([QED.qed(Chem.MolFromSmiles(smi)) for smi in smiles])
         self.sa.extend([sascorer.calculateScore(Chem.MolFromSmiles(smi)) for smi in smiles])
@@ -571,7 +571,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
     def generate_offspring_batch(self):
         n_oracle = []
         num_samples = min(5000,int((self.config.offspring_size-len(self.train_ids)) // max(self.prev_validity,0.01)))
-        if self.config.use_prompter and  max(self.scores)>0:
+        if (self.config.use_prompter and  max(self.scores)>0): #or self.config.use_prescreen:
             self.prompter.offspring_size = num_samples
             prompts, n_oracle = self.prompter.build_prompts_and_masks(dev=self.device)
 
