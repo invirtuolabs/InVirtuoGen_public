@@ -104,6 +104,8 @@ def process_smiles_dataset(input_path: str, output_path: str, batch_size: int = 
         batch_size=batch_size,
         num_proc=num_proc,
         remove_columns="smiles",
+        keep_in_memory=True,
+        load_from_cache_file=False,
 
     )
 
