@@ -18,7 +18,7 @@ import random
 RDLogger.DisableLog("rdApp.*")
 
 
-def process_batch(examples, verbose=True, num_max_fragments=7):
+def process_batch(examples, verbose=True, num_max_fragments=7, order_fragments=True):
     """
     Processes a batch of SMILES strings by removing salts and stereochemistry,
     fragmenting molecules, and randomizing fragments if applicable.
@@ -49,7 +49,8 @@ def process_batch(examples, verbose=True, num_max_fragments=7):
             for _ in range(1000):
                 fragments = smiles2frags(smiles, num_fragments)
                 random.shuffle(fragments)  # Randomize fragment order
-                fragments = order_fragments_by_attachment_points(fragments)
+                if order_fragments:
+                    fragments = order_fragments_by_attachment_points(fragments)
                 new_smiles = Chem.CanonSmiles(bridge_smiles_fragments(fragments))
                 if smiles == new_smiles:
                     found_match = True
@@ -127,8 +128,11 @@ def main():
     parser.add_argument("--num_proc", type=int, default=40, help="Number of parallel processes.")
     parser.add_argument('--csv', action='store_true', help='load from csv')
     parser.add_argument('--num_max_fragments', type=int, default=7, help='Maximum number of fragments to use.')
+    parser.add_argument('--order_fragments', action='store_true', help='Order fragments by attachment points.')
     args = parser.parse_args()
-    process_smiles_dataset(**vars(args))
+    config = vars(args)
+    config["output_path"] = config["output_path"] + f"_max_frags_{config['num_max_fragments']}" + "_ordered" if config["order_fragments"] else ""
+    process_smiles_dataset(**config)
 
 
 if __name__ == "__main__":
