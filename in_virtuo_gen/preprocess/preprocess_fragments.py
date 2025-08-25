@@ -18,7 +18,7 @@ import random
 RDLogger.DisableLog("rdApp.*")
 
 
-def process_batch(examples, verbose=True):
+def process_batch(examples, verbose=True, num_max_fragments=7):
     """
     Processes a batch of SMILES strings by removing salts and stereochemistry,
     fragmenting molecules, and randomizing fragments if applicable.
@@ -42,8 +42,7 @@ def process_batch(examples, verbose=True):
         # Determine maximum number of fragments available
         max_fragments = num_frags(smiles)
         if max_fragments > 1:
-            # Choose num_fragments based on a random chance:
-            num_fragments = min(max_fragments, 7) #if random.random() < 0.99 else min(max_fragments, 7)
+            num_fragments = min(max_fragments, num_max_fragments) #
 
             # Attempt up to 1000 times to get a valid fragmentation
             found_match = False
@@ -127,6 +126,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=10000, help="Batch size for processing.")
     parser.add_argument("--num_proc", type=int, default=40, help="Number of parallel processes.")
     parser.add_argument('--csv', action='store_true', help='load from csv')
+    parser.add_argument('--num_max_fragments', type=int, default=7, help='Maximum number of fragments to use.')
     args = parser.parse_args()
     process_smiles_dataset(**vars(args))
 
