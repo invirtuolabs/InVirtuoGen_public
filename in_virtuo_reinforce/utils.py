@@ -471,7 +471,7 @@ class GeneticPrompter:
         for _ in range(self.offspring_size):
 
 
-            i1, i2 = rank_based_selection(self.vocab, 2, kappa=self.kappa)
+            i1, i2 = w(self.vocab, 2, kappa=self.kappa)
             i1 = torch.tensor(i1)
             i2 = torch.tensor(i2)
             p1_list.append(i1)
@@ -505,14 +505,14 @@ class GeneticPrompter:
         if self.close:
             frags = fr1
         else:
-            frags = fr1[:-self.K] + fr2[-self.K:]
+            frags = fr1[:-self.K] + fr2[-self.K:] if len(fr1) < 7 else fr1[:-2] + fr2[-2:]
         random.shuffle(frags)  # if not self.close else None
-        frags += fr1[-self.K:] + fr2[:-self.K]
+        frags += fr1[-self.K:] + fr2[:-self.K] if len(fr1) < 7 else fr1[:-2] + fr2[-2:]
         kept = " ".join(frags)  # +" "
         return self.tokenizer.encode(kept)[:n_oracle]
 
 
-def rank_based_selection(smiles_scores: Dict[str, float], n_select: int, kappa: float = 0.1) -> List[str]:
+def w(smiles_scores: Dict[str, float], n_select: int, kappa: float = 0.1) -> List[str]:
     """
     Rank‐based sampling without replacement over a smiles→score dict.
 
@@ -527,7 +527,7 @@ def rank_based_selection(smiles_scores: Dict[str, float], n_select: int, kappa: 
     keys = list(smiles_scores.keys())
     N = len(keys)
     if n_select >= N:
-        return keys[:]  # return all if asking for too many
+        return keys[0],keys[0]  # return all if asking for too many
 
     # 1) collect scores in same order as keys
     scores = np.array([smiles_scores[s] for s in keys], dtype=np.float64)

@@ -13,7 +13,7 @@ import torch.optim as optim
 from torch.utils.data.dataset import ConcatDataset
 
 from lightning.pytorch import Trainer
-
+import random
 from torch.distributions import Categorical
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset, TensorDataset
@@ -59,6 +59,7 @@ class OptimizerConfig:
     use_mutation: bool
     identifier: str
     reverse_kl: bool
+    start_seed: int
     seed: int
     mutation_size: int
     task: str
@@ -71,8 +72,10 @@ class OptimizerConfig:
     vocab_size: int
     first_pop_size: int
     vocab_mask: bool
+    rl_lr: float
     no_stop: bool = False
     mse_loss: bool = False
+    max_frags: int = 5
 
 
 def compute_kl_divergence(logits_new, logits_old, source_mask, reverse=False):
@@ -209,13 +212,13 @@ class InVirtuoFMOptimizer(BaseOptimizer):
                 vocab_size=self.config.vocab_size,
                 kappa=0.001,
                 always_ok=None,
-                max_frags=5,
+                max_frags=self.config.max_frags,
                 pad_id=3,
                 score_based=False,
                 K=1 #if self.config.use_prescreen else 2,
             )
 
-        self.model_opt = optim.Adam(self.model.parameters(), lr=1e-5)
+        self.model_opt = optim.Adam(self.model.parameters(), lr=self.config.rl_lr)
         self.lr_scheduler = get_cosine_schedule_with_warmup(self.model_opt, num_warmup_steps=0, num_training_steps=10000 * self.config.num_reinforce_steps // self.config.offspring_size * 2)
 
         # Initialize trainer
@@ -268,29 +271,50 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         start = len(self.ga_scores)
         new_smiles = len(self.train_ids)
         tries = 0
-        for _ in range(self.config.mutation_size):
+        i_=0
+        for iteration in range(self.config.mutation_size):
             score = None
             i_ = 0
+
             while i_ < max_tries:
-                smi, tries_temp = reproduce(sorted(self.mol_buffer.items(), key=lambda x: x[1][0], reverse=True)[i_ : i_ + 1], 1)
+                # Select parent based on use_prescreen mode
+                if self.config.use_prescreen:
+                    selected_parent = sorted(self.mol_buffer.items(), key=lambda x: x[1][0], reverse=True)[i_ : i_ + 1]
+                else:
+                    selected_items = sorted(self.mol_buffer.items(), key=lambda x: x[1][0], reverse=True)
+                    selected_idx = i_ % len(selected_items) if selected_items else 0
+                    selected_parent = [selected_items[selected_idx]] if selected_items else []
+
+                if not selected_parent:
+                    break
+
+                smi, tries_temp = reproduce(selected_parent, 1)
                 smi = Chem.MolToSmiles(Chem.MolFromSmiles(smi))
-                tries += tries_temp + i_
+                tries += tries_temp + (i_ if self.config.use_prescreen else 0)
+
                 if smi and smi not in self.mol_buffer:
                     score = self.oracle(smi)
+
                     if score is not None:
                         self.ga_scores.append(score)
                         self.qed_ga.append(QED.qed(Chem.MolFromSmiles(smi)))
                         self.sa_ga.append(sascorer.calculateScore(Chem.MolFromSmiles(smi)))
-                        if score > sorted(self.mol_buffer.values(), key=lambda x: x[0], reverse=True)[min(len(self.mol_buffer.values()) - 1, 9)][0] and self.config.train_mutation:
+
+                        if (score > sorted(self.mol_buffer.values(), key=lambda x: x[0], reverse=True)[min(len(self.mol_buffer.values()) - 1, 9)][0]
+                            and self.config.train_mutation):
                             new_seq = torch.tensor(self.tokenizer.encode(" ".join(decompose_smiles(smi))))
                             self.train_ids.append(new_seq)
                             self.train_scores.append(score)
                             self.train_x_0.append(torch.randint(4, 203, (len(new_seq),)))
                             self.prompter.update_with_score(smi, score)
-                        new_smiles += 1
+                            new_smiles += 1
                         break
+
                 i_ += 1
 
+                # For prescreen mode, break if we've exhausted the available molecules
+                if self.config.use_prescreen and i_ >= len(self.mol_buffer):
+                    break
             if new_smiles >= self.config.offspring_size:
                 break
         self.used_mutation = True
@@ -323,8 +347,9 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             if score == 1 and self.config.no_stop:
                 self.config.num_reinforce_steps = 0
             if self.config.use_prompter:
-                self.prompter.update_with_score(smi, score)  # type: ignore[attr-defined]
-                self.prompter.bandit.update(len(seq[seq != self.model.pad_token_id]), score)
+                if score>0:
+                    self.prompter.update_with_score(smi, score)  # type: ignore[attr-defined]
+                    self.prompter.bandit.update(len(seq[seq != self.model.pad_token_id]), score)
             else:
                 self.bandit.update(len(seq[seq != self.model.pad_token_id]), score)
             self.train_ids.append(seq)
@@ -333,6 +358,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
 
             if len(self.train_ids) >= self.config.offspring_size - self.config.mutation_size * (not self.used_mutation and self.config.train_mutation):
                 break
+        return
 
 
     def add_experience(self):
@@ -451,7 +477,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             agent_lp, entropy, _, _ = self.compute_logprobs(batch_ids, batch_uni, batch_t, prior=False, x_t=batch_x_ts, source_mask=batch_masks)
             ratio = torch.exp((agent_lp - batch_old_lp))
             score_std = batch_scores.std()
-            if batch_scores.numel() > 1 :
+            if batch_scores.numel() > 1 and sum(batch_scores) > 0:
                 adv = (batch_scores - batch_scores.mean()) / (score_std + 1e-8)
             else:
                 adv = torch.zeros_like(batch_scores)
@@ -463,7 +489,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             pg_loss = -torch.min(surr1, surr2).mean()
             loss = pg_loss - 0.01 * entropy.mean()
 
-            if torch.isnan(loss) or torch.isinf(loss):
+            if torch.isnan(loss) or torch.isinf(loss) or pg_loss.sum() == 0:
                 continue
 
             loss.backward()
@@ -493,54 +519,59 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         Returns:
             List of (sequence, score, smile) triples
         """
-        B = self.config.first_pop_size * 2  # generate more samples to ensure we have enough valid ones
-        n_oracle = [self.bandit.select_length() for _ in range(B)]
-
-        samples, init_ids = self.model.sample(num_samples=B, temperature=1.0, noise=0.0, oracle=n_oracle, eta=1, return_uni=True, vocab_mask=self.vocab_mask)
-        valid, smiles, _ = evaluate_smiles(
-            generated_ids=samples,
-            tokenizer=self.tokenizer,
-            return_values=True,
-            print_flag=False,
-            print_metrics=False,
-            exclude_salts=False,
-        )
-
-        # keep only the valid ones
-        samples = [torch.tensor(samples[i]) for i in valid][: self.config.first_pop_size]
-        init_ids = [torch.tensor(init_ids[i]) for i in valid][: self.config.first_pop_size]
-        n_oracle = [n_oracle[i] for i in valid][: self.config.first_pop_size]
-        smiles = [smiles[i] for i in valid][: self.config.first_pop_size]
-        scores = self.oracle(smiles)
-        self.scores.extend(scores)
-        self.qed.extend([QED.qed(Chem.MolFromSmiles(smi)) for smi in smiles])
-        self.sa.extend([sascorer.calculateScore(Chem.MolFromSmiles(smi)) for smi in smiles])
-
+        B = int(self.config.first_pop_size * 1.1)  # generate more samples to ensure we have enough valid ones
         if self.config.use_prescreen:
             # 1. Load ZINC SMILES
             df = pd.read_csv("in_virtuo_reinforce/vocab/zinc250k.csv").sort_values(by=self.config.oracle, ascending=False)[: self.config.first_pop_size]
             smiles = df["smiles"].values.tolist()
             scores = df[self.config.oracle].values.tolist()
-            samples = [torch.tensor(self.tokenizer.encode(" ".join(decompose_smiles(sm)))) for sm in smiles]
+            samples = [torch.tensor(self.tokenizer.encode(" ".join(decompose_smiles(sm, max_frags=self.config.max_frags)))) for sm in smiles]
             init_ids = [torch.randint(4, 203, (len(s),)) for s in samples]
+        else:
+            n_oracle = [67 if self.config.oracle=="valsartan_smarts" else self.bandit.select_length() for _ in range(int(B))] #
+
+            samples, init_ids = self.model.sample(num_samples=B, temperature=1.0, noise=0.0, oracle=n_oracle, eta=1, return_uni=True, vocab_mask=self.vocab_mask,)
+            valid, smiles, _ = evaluate_smiles(
+                generated_ids=samples,
+                tokenizer=self.tokenizer,
+                return_values=True,
+                print_flag=False,
+                print_metrics=False,
+                exclude_salts=False,
+            )
+
+            # keep only the valid ones
+            samples = [torch.tensor(samples[i]) for i in valid][: self.config.first_pop_size]
+            init_ids = [torch.tensor(init_ids[i]) for i in valid][: self.config.first_pop_size]
+            n_oracle = [n_oracle[i] for i in valid][: self.config.first_pop_size]
+            smiles = [smiles[i] for i in valid][: self.config.first_pop_size]
+            scores = self.oracle(smiles)
+        self.scores.extend(scores)
+        self.qed.extend([QED.qed(Chem.MolFromSmiles(smi)) for smi in smiles])
+        self.sa.extend([sascorer.calculateScore(Chem.MolFromSmiles(smi)) for smi in smiles])
+
+
         for i in range(len(samples)):
-            if self.config.use_prompter:
-                self.prompter.update_with_score(smiles[i], scores[i])
-                self.prompter.bandit.update(len(samples[i][samples[i] != self.model.pad_token_id]), scores[i])
-            else:
-                self.bandit.update(len(samples[i][samples[i] != self.model.pad_token_id]), scores[i])
+            if scores[i]>0:
+                if self.config.use_prompter:
+
+                    self.prompter.update_with_score(smiles[i], scores[i])
+                    self.prompter.bandit.update(len(samples[i][samples[i] != self.model.pad_token_id]), scores[i])
+                else:
+                    self.bandit.update(len(samples[i][samples[i] != self.model.pad_token_id]), scores[i])
         self.train_ids = [s[s != self.model.pad_token_id] for s in samples]
         self.train_x_0 = [i[: len(s)] for i, s in zip(init_ids, self.train_ids)]
         self.train_scores = scores
-        self.reinforce([item for item in self.train_ids], [item for item in self.train_scores], [item for item in self.train_x_0])
-        self.add_experience()
+        if max(self.train_scores)>0 and len(self.train_ids)>=self.config.offspring_size:
+            self.reinforce([item for item in self.train_ids], [item for item in self.train_scores], [item for item in self.train_x_0])
+            self.add_experience()
         self.prior.model = copy.deepcopy(self.model.model)
         self.train_ids, self.train_scores, self.train_x_0 = [], [], []
 
     def generate_offspring_batch(self):
         n_oracle = []
-        num_samples = min(1000,int((self.config.offspring_size-len(self.train_ids)) // max(self.prev_validity,0.01)))
-        if self.config.use_prompter:
+        num_samples = min(5000,int((self.config.offspring_size-len(self.train_ids)) // max(self.prev_validity,0.01)))
+        if self.config.use_prompter and  max(self.scores)>0:
             self.prompter.offspring_size = num_samples
             prompts, n_oracle = self.prompter.build_prompts_and_masks(dev=self.device)
 
@@ -548,13 +579,13 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         else:
             prompts = None
             for i in range(num_samples):
-                n_oracle.append(self.bandit.select_length())
+                n_oracle.append(67 if self.config.oracle.find("smarts") != -1 and not self.config.use_prescreen else self.bandit.select_length()) #self.b andit.select_length()
         with torch.autocast(self.device.type, dtype=torch.float16, enabled=self.device.type == "cuda"):
             all_seqs, all_x_0 = self.model.sample(
                 prompt=prompts,
                 num_samples=num_samples,
                 temperature=self.config.temperature,
-                noise=0,
+                noise=1 if self.config.use_prescreen else 0,
                 oracle=n_oracle,
                 start_t=self.config.start_t ,
                 fade_prompt=False,
@@ -569,7 +600,9 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         valid_new_smiles, valid_new_seqs, valid_new_x_0 = filter_valid_new(valid, all_smiles, all_seqs, all_x_0, self.mol_buffer)
         novelty = len(valid_new_seqs) / len(all_smiles)
         valid_new_smiles, valid_new_seqs, valid_new_x_0 = valid_new_smiles[:self.config.offspring_size], valid_new_seqs[:self.config.offspring_size], valid_new_x_0[:self.config.offspring_size]
+
         self.prev_validity = min(len(valid_new_seqs) / self.config.offspring_size, 1)
+
         self.global_step += 1
         wandb.log(
             {
@@ -635,8 +668,10 @@ class InVirtuoFMOptimizer(BaseOptimizer):
                     self.config.offspring_size = 500
                 else:
                     print("STOPPING")
+
                     for i in range(self.max_oracle_calls - len(self.mol_buffer)):
                         self.mol_buffer["finished" + str(i)] = [0, len(self.mol_buffer) + i]
+
 
             if len(self.mol_buffer) > 0:
                 smis_, true_scores_ = [], []
@@ -719,14 +754,13 @@ if __name__ == "__main__":
     parser.add_argument("--oracle", type=str, default="albuterol_similarity")
     parser.add_argument("--start_t", type=float, default=0.0)
     # parser.add_argument("--mutation_rate", type=float, default=0.1)
-    parser.add_argument("--beta", type=float, default=0.990)
-
+    parser.add_argument("--beta", type=float, default=0.99)
+    parser.add_argument("--rl_lr", type=float, default=1e-4)
 
     parser.add_argument("--offspring_size", type=int, default=64)
     parser.add_argument("--num_reinforce_steps", type=int, default=10)
     parser.add_argument("--vocab_mask", action="store_true")
     parser.add_argument("--lr", default=0.1, type=float)
-    parser.add_argument("--seed", type=int, default=1)
     # parser.add_argument("--use_reward_model", action="store_true")
     parser.add_argument("--big", action="store_true")
     parser.add_argument("--dt", type=float, default=0.01)
@@ -751,6 +785,8 @@ if __name__ == "__main__":
     parser.add_argument("--first_pop_size", type=int, default=50)
     parser.add_argument("--no_stop", action="store_true")
     parser.add_argument("--num_seeds", type=int, default=3)
+    parser.add_argument("--start_seed", type=int, default=0)
+    parser.add_argument("--max_frags", type=int, default=5)
     # Then in your config setup, add:
     args = parser.parse_args()
     device = f"cuda:{args.device}" if len(args.device)==1 else args.device
@@ -761,7 +797,6 @@ if __name__ == "__main__":
     config_dict.pop("end_task")
     num_seeds=config_dict.pop("num_seeds")
     # Now you can simply pass all arguments
-    seed = args.seed
     output_dir = args.output_dir
     output_dir = os.path.join(output_dir, f"target_property_optimization")
     import datetime
@@ -769,7 +804,7 @@ if __name__ == "__main__":
     identifier = datetime.datetime.now().strftime("%Y%m%d_%H%M%S") if not args.identifier else args.identifier
     output_dir += "/" + identifier
     print("Output dir: ", output_dir)
-    for seed in range(num_seeds):
+    for seed in range(args.start_seed, num_seeds):
         for oracle in oracles[args.start_task : args.end_task]:
             try:
                 lightning.seed_everything(seed)
