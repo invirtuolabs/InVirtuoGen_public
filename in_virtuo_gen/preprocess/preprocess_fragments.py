@@ -78,7 +78,7 @@ def process_batch(examples, verbose=True, num_max_fragments=7):
     return results
 
 
-def process_smiles_dataset(input_path: str, output_path: str, batch_size: int = 10000, num_proc: int = 4, csv: bool = False):
+def process_smiles_dataset(input_path: str, output_path: str, batch_size: int = 10000, num_proc: int = 4, csv: bool = False, num_max_fragments: int = 7):
     """
     Loads a dataset of SMILES strings, processes each SMILES entry by fragmentation,
     and saves the processed dataset to disk.
@@ -98,7 +98,7 @@ def process_smiles_dataset(input_path: str, output_path: str, batch_size: int = 
     print(f"Loaded dataset with {len(dataset)} examples")
 
     processed_dataset = dataset.map(
-        lambda x: process_batch(x),
+        lambda x: process_batch(x, num_max_fragments=num_max_fragments),
         batched=False,
         batch_size=batch_size,
         num_proc=num_proc,
