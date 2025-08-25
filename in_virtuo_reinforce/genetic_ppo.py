@@ -541,9 +541,11 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         if self.config.use_prescreen:
             # 1. Load ZINC SMILES
             df = pd.read_csv("in_virtuo_reinforce/vocab/zinc250k.csv").sort_values(by=self.config.oracle, ascending=False)[: self.config.first_pop_size]
-            smiles = df["smiles"].values.tolist() + smiles
 
+            print(f"Loaded {len(smiles)} ZINC SMILES")
             samples = [torch.tensor(self.tokenizer.encode(" ".join(decompose_smiles(sm, max_frags=self.config.max_frags)))) for sm in smiles] + samples
+            smiles = df["smiles"].values.tolist() + smiles
+            assert len(samples) == len(smiles)
             init_ids = [torch.randint(4, 203, (len(s),)) for s in samples] + init_ids
         scores = self.oracle(smiles)
         self.scores.extend(scores)
