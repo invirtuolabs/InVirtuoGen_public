@@ -131,13 +131,14 @@ class InVirtuoBase(pl.LightningModule):
         Returns:
             int: Total number of training steps across all epochs.
         """
-        if hasattr(self.trainer, 'max_steps') and  self.trainer.max_steps>-1 and self.trainer.max_steps is not None:
+        if hasattr(self.trainer, 'max_steps') and self.trainer.max_steps is not None and  self.trainer.max_steps>-1 :
             return self.trainer.max_steps
         dataloader = self.trainer.datamodule.train_dataloader() # type: ignore[attr-defined]
         dataset_size = len(dataloader)
         num_devices = max(1, self.trainer.num_devices)
         num_steps = dataset_size * max(1,self.trainer.max_epochs) // (self.trainer.accumulate_grad_batches ) # type: ignore[attr-defined]
-        print("total number steps is", num_steps)
+        num_steps/= self.hparams.batch_size
+        print("total number of steps is", num_steps)
         return num_steps
 
     def load_datamodule(self, datamodule: pl.LightningDataModule):
