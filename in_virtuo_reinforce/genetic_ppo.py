@@ -243,12 +243,15 @@ class InVirtuoFMOptimizer(BaseOptimizer):
 
         else:
             self.vocab_mask = None
+        self.prev_novelty = 1
 
     def set_c_neg(self, novelty):
         """
         Set the negative sample weight value based on the number of valid new sequences.
         Also controls the stop counter.
         """
+        self.global_step += 1
+        wandb.log({"train/c_neg": self.c_neg, "num_oracle_calls": len(self.mol_buffer.values())}, step=self.global_step)
         if novelty >= 0.5*(1-self.config.start_t):
             self.c_neg = self.config.c_neg
             self.stop_counter -= 1
@@ -258,7 +261,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             self.config.c_neg *= 0.9
         elif novelty < 0.1:
             self.c_neg = 0
-            self.config.c_neg *= 0
+            self.config.c_neg *= 0.9
             self.stop_counter += 1
         self.global_step += 1
         wandb.log({"train/c_neg": self.c_neg, "train/stop_counter": self.stop_counter, "num_oracle_calls": len(self.mol_buffer.values())}, step=self.global_step)
@@ -290,8 +293,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
 
                 smi, tries_temp = reproduce(selected_parent, 1)
                 smi = Chem.MolToSmiles(Chem.MolFromSmiles(smi))
-                tries += tries_temp + (i_ if self.config.use_prescreen else 0)
-
+                tries += tries_temp + i_
                 if smi and smi not in self.mol_buffer:
                     score = self.oracle(smi)
 
@@ -307,14 +309,11 @@ class InVirtuoFMOptimizer(BaseOptimizer):
                             self.train_scores.append(score)
                             self.train_x_0.append(torch.randint(4, 203, (len(new_seq),)))
                             self.prompter.update_with_score(smi, score)
-                            new_smiles += 1
+                        new_smiles += 1
                         break
 
                 i_ += 1
 
-                # For prescreen mode, break if we've exhausted the available molecules
-                if self.config.use_prescreen and i_ >= len(self.mol_buffer):
-                    break
             if new_smiles >= self.config.offspring_size:
                 break
         self.used_mutation = True
@@ -348,6 +347,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
                 self.config.num_reinforce_steps = 0
             if self.config.use_prompter:
                 if score>0:
+
                     self.prompter.update_with_score(smi, score)  # type: ignore[attr-defined]
                     self.prompter.bandit.update(len(seq[seq != self.model.pad_token_id]), score)
             else:
@@ -380,59 +380,48 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         """
         return torch.nn.utils.rnn.pad_sequence(ids, batch_first=True, padding_value=self.model.pad_token_id).to(self.device)
 
-    def construct_dataset(self, ids, scores, uni, timesteps=10):
-        ids_tensor = self.pad_seqs([i.clone().detach() for i in ids]).to(self.device)
-        uni_tensor = self.pad_seqs([torch.tensor(u) if  self.config.no_sample_uni else
-                                    torch.randint(4, 203, (len(u),), device=self.device) for u in uni]).to(self.device)
-        scores_tensor = torch.tensor(scores, device=self.device)
-        old_logprobs,x_ts_list,source_masks_list,t_list = [],[],[],[]
-        t_roll = torch.rand(len(ids_tensor), device=self.device)
-        for i in range(timesteps):
-            current_t = (t_roll / 10 + i * (1.0 - self.config.start_t) / timesteps) % 1
-            old_lp, _, x_t, source_mask = self.compute_logprobs(ids_tensor, uni_tensor, current_t, prior=True)
-            old_logprobs.append(old_lp.detach().unsqueeze(1))
-            x_ts_list.append(x_t.unsqueeze(1).clone())
-            source_masks_list.append(source_mask.unsqueeze(1).clone().to(self.device))
-            t_list.append(current_t)
-        ids_tensor = ids_tensor.repeat(timesteps, 1)
-        scores_tensor = scores_tensor.repeat(timesteps)
-        uni_tensor = uni_tensor.repeat(timesteps, 1)
-        old_logprobs = torch.cat(old_logprobs, dim=0).squeeze(1)
-        x_ts_all = torch.cat(x_ts_list, dim=0).squeeze(1)
-        source_masks_all = torch.cat(source_masks_list, dim=0).squeeze(1)
-        t_list = torch.cat(t_list, dim=0)
-        # Create dataset for new samples
-        new_dataset = TensorDataset(
-            ids_tensor, scores_tensor, uni_tensor, old_logprobs, x_ts_all, source_masks_all,
-            t_list
-        )
-        return new_dataset
+    def construct_rollout_ds(self, ids, scores, uni):
+        """
+        Construct the rollout dataset.
+        Note that the logprobs needs to be precomputed because we cant evaluate the whole trajectory at once like in a LLM
+        """
+        ids = self.pad_seqs([torch.tensor(i) for i in ids]).to(self.device)
+        uni = self.pad_seqs([torch.tensor(u) if self.config.no_sample_uni else torch.randint(4, 203, (len(u),), device=self.device) for u in uni]).to(self.device)
+        scores = torch.tensor(scores, device=self.device)
+        t_roll = torch.rand(len(ids), device=self.device) * (1 - self.config.start_t) + self.config.start_t if self.config.use_prompter else torch.rand(len(ids), device=self.device)
+        # Pre-compute old logprobs AND masks for each timestep
+        with torch.no_grad():
+            old_logprobs = []
+            x_ts_list = []
+            source_masks_list = []
+            for i in range(self.config.num_reinforce_steps):
+                current_t = (t_roll/10 + i * (1.0 - self.config.start_t) / self.config.num_reinforce_steps) % 1
+                old_lp, _, x_t, source_mask = self.compute_logprobs(ids, uni, current_t, prior=False)
+                old_logprobs.append(old_lp.detach().unsqueeze(1))
+                x_ts_list.append(x_t.unsqueeze(1))
+                source_masks_list.append(source_mask.unsqueeze(1).clone())
+            old_logprobs = torch.cat(old_logprobs, dim=1)
+            x_ts_all = torch.cat(x_ts_list, dim=1)
+            source_masks_all = torch.cat(source_masks_list, dim=1)
+        return TensorDataset(ids, scores, uni, t_roll, old_logprobs, x_ts_all, source_masks_all)
 
     def construct_loader(self, ids, scores, uni):
-        # Prepare data
-        new_dataset = self.construct_dataset(ids, scores, uni)
-        datasets = [new_dataset]
-        # Add experience dataset if available
+        """
+        Construct the loader for the PPO training.
+        """
+
+        scores = torch.tensor(scores, device=self.device)
+        rollout_ds = self.construct_rollout_ds(ids, scores, uni)
 
         if len(self.experience) >= self.config.experience_replay_size and self.config.experience_replay_size > 0:
-            exp_seqs, exp_scores, exp_uni = self.experience.sample(
-                    min(len(self.experience), self.config.experience_replay_size)
-                )
-            exp_dataset = self.construct_dataset(exp_seqs, exp_scores, exp_uni, timesteps=self.config.num_reinforce_steps//2)
-            datasets.append(exp_dataset)
-
-        # Combine datasets
-        combined_dataset = ConcatDataset(datasets)
-
-        # Create loader
+            exp_seqs, exp_scores, exp_uni = self.experience.sample(self.config.experience_replay_size)
+            exp_ds = self.construct_rollout_ds(exp_seqs, exp_scores, exp_uni)
+            train_ds = ConcatDataset([rollout_ds, exp_ds])
+        else:
+            train_ds = rollout_ds
         loader = DataLoader(
-            combined_dataset,
-            batch_size=min(self.config.offspring_size + self.config.experience_replay_size, 128),
-            shuffle=True,
-            collate_fn=custom_collate,
-            drop_last=False
-        )
-
+            train_ds, batch_size=min(self.config.offspring_size + self.config.experience_replay_size, 128), shuffle=True, collate_fn=pad_collate_with_masks, drop_last=False
+        )  # Need to update this too
         return loader
 
     def compute_logprobs(self, ids, uni, t, prior=False, x_t=None, source_mask=None):
@@ -469,20 +458,28 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         self.model.train()
 
         loader = self.construct_loader(ids, scores, uni)
+        for i in range(self.config.num_reinforce_steps):
+            for batch_ids, batch_scores, batch_uni, batch_t, batch_old_lp, batch_x_ts, batch_masks in loader:  #
+                self.model_opt.zero_grad()
+                self.lr_scheduler.step()
 
-        for batch_ids, batch_scores, batch_uni, batch_t, batch_old_lp, batch_x_ts, batch_masks in loader:
-            self.model_opt.zero_grad()
-            self.lr_scheduler.step()
+                # Extract pre-computed values for this epoch
+                batch_old_lp_i = batch_old_lp[:, i]
+                batch_x_t_i = batch_x_ts[:, i]
+                batch_mask_i = batch_masks[:, i]
+                current_t = (batch_t + i * (1.0 - self.config.start_t) / self.config.num_reinforce_steps) % 1.0
 
-            agent_lp, entropy, _, _ = self.compute_logprobs(batch_ids, batch_uni, batch_t, prior=False, x_t=batch_x_ts, source_mask=batch_masks)
-            ratio = torch.exp((agent_lp - batch_old_lp))
-            score_std = batch_scores.std()
-            if batch_scores.numel() > 1 and sum(batch_scores) > 0:
-                adv = (batch_scores - batch_scores.mean()) / (score_std + 1e-8)
-            else:
-                adv = torch.zeros_like(batch_scores)
-
-            adv = torch.where(adv > 0, adv, self.c_neg * adv)
+                # Compute new logprobs with SAME mask
+                agent_lp, entropy, _, _ = self.compute_logprobs(batch_ids, batch_uni, current_t, prior=False, x_t=batch_x_t_i, source_mask=batch_mask_i)
+                ratio = torch.exp((agent_lp - batch_old_lp_i))
+                # More robust advantage calculation
+                score_std = batch_scores.std()
+                if batch_scores.numel() > 1 and not score_std < 1e-8:
+                    adv = (batch_scores - batch_scores.mean()) / (score_std + 1e-8)
+                else:
+                    adv = torch.zeros_like(batch_scores)
+                #reduce weight of negative samples
+                adv = torch.where(adv > 0, adv, self.c_neg * adv)#.clamp(min=-1, max=1)
 
             surr1 = ratio * adv
             surr2 = torch.clamp(ratio, 1 - self.config.clip_eps, 1 + self.config.clip_eps) * adv
@@ -523,7 +520,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
 
         n_oracle = [67 if self.config.oracle=="valsartan_smarts" and not self.config.use_prescreen else self.bandit.select_length() for _ in range(int(B))] #
 
-        samples, init_ids = self.model.sample(num_samples=B, temperature=1.0, noise=0.0, oracle=n_oracle, eta=1, return_uni=True, vocab_mask=self.vocab_mask,)
+        samples, init_ids = self.model.sample(num_samples=B, temperature=1.0 if self.prev_novelty>0.5 else 1.5, noise=0.0, oracle=n_oracle, eta=1, return_uni=True, vocab_mask=self.vocab_mask,)
         valid, smiles, _ = evaluate_smiles(
             generated_ids=samples,
             tokenizer=self.tokenizer,
@@ -538,6 +535,8 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         init_ids = [torch.tensor(init_ids[i]) for i in valid][: self.config.first_pop_size]
         n_oracle = [n_oracle[i] for i in valid][: self.config.first_pop_size]
         smiles = [smiles[i] for i in valid][: self.config.first_pop_size]
+        scores = self.oracle(smiles)
+
         if self.config.use_prescreen:
             # 1. Load ZINC SMILES
             df = pd.read_csv("in_virtuo_reinforce/vocab/zinc250k.csv").sort_values(by=self.config.oracle, ascending=False)[: self.config.first_pop_size]
@@ -545,9 +544,9 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             print(f"Loaded {len(smiles)} ZINC SMILES")
             samples = [torch.tensor(self.tokenizer.encode(" ".join(decompose_smiles(sm, max_frags=self.config.max_frags)))) for sm in smiles] + samples
             smiles = df["smiles"].values.tolist() + smiles
+            scores = df[self.config.oracle].values.tolist() + scores
             assert len(samples) == len(smiles)
             init_ids = [torch.randint(4, 203, (len(s),)) for s in samples] + init_ids
-        scores = self.oracle(smiles)
         self.scores.extend(scores)
         self.qed.extend([QED.qed(Chem.MolFromSmiles(smi)) for smi in smiles])
         self.sa.extend([sascorer.calculateScore(Chem.MolFromSmiles(smi)) for smi in smiles])
@@ -564,7 +563,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         self.train_ids = [s[s != self.model.pad_token_id] for s in samples]
         self.train_x_0 = [i[: len(s)] for i, s in zip(init_ids, self.train_ids)]
         self.train_scores = scores
-        if max(self.train_scores)>0 and len(self.train_ids)>=self.config.offspring_size:
+        if max(self.train_scores)>0 and len(self.train_ids)>=self.config.first_pop_size//2:
             self.reinforce([item for item in self.train_ids], [item for item in self.train_scores], [item for item in self.train_x_0])
             self.add_experience()
         self.prior.model = copy.deepcopy(self.model.model)
@@ -601,6 +600,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
 
         valid_new_smiles, valid_new_seqs, valid_new_x_0 = filter_valid_new(valid, all_smiles, all_seqs, all_x_0, self.mol_buffer)
         novelty = len(valid_new_seqs) / len(all_smiles)
+        self.prev_novelty = novelty
         valid_new_smiles, valid_new_seqs, valid_new_x_0 = valid_new_smiles[:self.config.offspring_size], valid_new_seqs[:self.config.offspring_size], valid_new_x_0[:self.config.offspring_size]
 
         self.prev_validity = min(len(valid_new_seqs) / self.config.offspring_size, 1)
@@ -749,7 +749,7 @@ if __name__ == "__main__":
     # for oracle in oracles:
     # try:
     import argparse
-
+    difficult_ones = ["valsartan_smarts", "thiothixene_rediscovery", "scaffold_hop", "troglitazone_rediscovery","sitagliptin_mpo"]
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt", type=str, default="checkpoints/invirtuo_gen.ckpt")
     parser.add_argument("--device", type=str, default="cuda:0")
@@ -789,6 +789,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_seeds", type=int, default=3)
     parser.add_argument("--start_seed", type=int, default=0)
     parser.add_argument("--max_frags", type=int, default=5)
+    parser.add_argument("--difficult_ones", action="store_true")
     # Then in your config setup, add:
     args = parser.parse_args()
     device = f"cuda:{args.device}" if len(args.device)==1 else args.device
@@ -806,9 +807,12 @@ if __name__ == "__main__":
     identifier = datetime.datetime.now().strftime("%Y%m%d_%H%M%S") if not args.identifier else args.identifier
     output_dir += "/" + identifier
     print("Output dir: ", output_dir)
+    difficult_ones_flag = config_dict.pop("difficult_ones")
     for seed in range(args.start_seed, num_seeds):
         for oracle in oracles[args.start_task : args.end_task]:
             try:
+                if difficult_ones_flag and oracle not in difficult_ones:
+                    continue
                 lightning.seed_everything(seed)
                 torch.manual_seed(seed)
                 np.random.seed(seed)

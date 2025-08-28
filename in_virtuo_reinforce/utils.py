@@ -266,7 +266,7 @@ class SoftmaxBandit:
         self.max_length = self.lengths.max()
         self.lr = lr
         self.beta = beta
-        self.Q = np.zeros_like(self.prior)
+        self.Q = np.ones_like(self.prior)*0.5
 
         self._history = []
 
@@ -286,51 +286,67 @@ class SoftmaxBandit:
         length = min(length, self.max_length)
         arm = self.index_of[length]
         self.Q[arm] += self.lr * (reward - self.Q[arm])
-
+        self.Q *= 0.999  # Small decay factor
         # 2) compute new posterior p
-        p = self._compute_probs()
+        # p = self._compute_probs()
 
-        # 3) blend into prior
-        self.prior = self.beta * self.prior + (1 - self.beta) * p
-        self.prior /= self.prior.sum()  # renormalize
+        # # 3) blend into prior
+        # self.prior = self.beta * self.prior + (1 - self.beta) * p
+        # self.prior /= self.prior.sum()  # renormalize
 
     def current_probs(self):
         return self._compute_probs()
 
     def plot_distribution(self, save_path=None, log_wandb=False, global_step=0, smiles_list=None):
-
-        p_cur = self.current_probs()
+        p_cur = self._compute_probs()  # Use _compute_probs() instead of current_probs()
         x = self.lengths
         w = 0.5
 
-        pastel_colors = ["#AEC6CF", "#FFB347"]  # light blue and peach
+        pastel_colors = ["#AEC6CF", "#FFB347", "#98D8C8"]  # Added a third color for Q values
 
-        fig, axs = plt.subplots(1, 2, figsize=(8, 4), sharey=False)
+        fig, axs = plt.subplots(1, 3, figsize=(12, 4), sharey=False)
 
-        # Prior plot
-
-        lengths = [len(s) for s in smiles_list]
-        axs[0].hist(lengths, bins=max(lengths)-min(lengths))
-        axs[0].set_title("Length Distribution")
+        # Actual length distribution from generated SMILES
+        if smiles_list:
+            lengths = [len(s) for s in smiles_list]
+            axs[0].hist(lengths, bins=max(lengths)-min(lengths), color=pastel_colors[0], edgecolor="gray")
+        axs[0].set_title("Generated Length Distribution")
         axs[0].set_xlabel("Sequence length")
         axs[0].set_ylabel("Frequency")
 
-
-        # Current plot
-        axs[1].bar(x, p_cur, color=pastel_colors[1], edgecolor="gray", width=w)
-        axs[1].set_title(f"Current π ")
+        # Initial prior (unchanged)
+        axs[1].bar(x, self.prior, color=pastel_colors[0], edgecolor="gray", width=w)
+        axs[1].set_title("Initial Prior π₀")
         axs[1].set_xlabel("Sequence length")
+        axs[1].set_ylabel("Probability")
 
-        # Overall adjustments
-        for ax in axs[1:]:
-            ax.set_ylim(0, max(max(self.prior), max(p_cur)) * 1.1)  # set same y-limits for easy comparison
-            ax.grid(axis="y", linestyle="--", alpha=0.7)
+        # Current distribution (prior + Q)
+        axs[2].bar(x, p_cur, color=pastel_colors[1], edgecolor="gray", width=w)
+        # Overlay Q values as a line plot to show adjustments
+        ax2_twin = axs[2].twinx()
+        ax2_twin.plot(x, self.Q, 'o-', color='red', alpha=0.6, label='Q values')
+        ax2_twin.set_ylabel('Q value', color='red')
+        ax2_twin.tick_params(axis='y', labelcolor='red')
+        ax2_twin.axhline(y=0, color='red', linestyle='--', alpha=0.3)
 
-        # plt.suptitle("Softmax + Prior-Update Bandit")
-        plt.tight_layout(rect=[0, 0, 1, 0.95])  # type: ignore[attr-defined]
-        if log_wandb:
-            global_step += 1
-            wandb.log({"bandit_distribution": wandb.Image(plt)}, step=global_step)  # type: ignore[attr-defined]
+        axs[2].set_title(f"Current π (Prior + Q)")
+        axs[2].set_xlabel("Sequence length")
+        axs[2].set_ylabel("Probability")
+
+        # Adjust y-limits for probability plots
+        max_prob = max(self.prior.max(), p_cur.max())
+        axs[1].set_ylim(0, max_prob * 1.1)
+        axs[2].set_ylim(0, max_prob * 1.1)
+
+        # Add grids
+        for ax in axs:
+            ax.grid(axis="y", linestyle="--", alpha=0.3)
+
+        plt.tight_layout()
+
+        if log_wandb and wandb.run:
+            wandb.log({"bandit_distribution": wandb.Image(plt)}, step=global_step)
+
         if save_path:
             plt.savefig(save_path)
             plt.close()
@@ -338,13 +354,6 @@ class SoftmaxBandit:
             plt.show()
 
 
-def valid_new(valid, smiles, off_seqs, prompts, mol_buffer, offspring_size):
-    valid = [i for i in valid if smiles[i] not in mol_buffer][:offspring_size]
-    off_seqs = [off_seqs[i] for i in valid][:offspring_size]
-    prompts = [prompts[i] for i in valid][:offspring_size]
-    smiles = [smiles[i] for i in valid][:offspring_size]
-
-    return valid, smiles, off_seqs, prompts
 
 
 class GeneticPrompter:
@@ -471,7 +480,7 @@ class GeneticPrompter:
         for _ in range(self.offspring_size):
 
 
-            i1, i2 = w(self.vocab, 2, kappa=self.kappa)
+            i1, i2 = rank_based_sampling(self.vocab, 2, kappa=self.kappa)
             i1 = torch.tensor(i1)
             i2 = torch.tensor(i2)
             p1_list.append(i1)
@@ -512,7 +521,7 @@ class GeneticPrompter:
         return self.tokenizer.encode(kept)[:n_oracle]
 
 
-def w(smiles_scores: Dict[str, float], n_select: int, kappa: float = 0.1) -> List[str]:
+def rank_based_sampling(smiles_scores: Dict[str, float], n_select: int, kappa: float = 0.1) -> List[str]:
     """
     Rank‐based sampling without replacement over a smiles→score dict.
 
@@ -538,7 +547,7 @@ def w(smiles_scores: Dict[str, float], n_select: int, kappa: float = 0.1) -> Lis
     # 3) assign ranks (best rank=1, second=2, ..., worst=N)
     ranks = np.empty(N, dtype=np.int64)
 
-    ranks[sorted_idx] = np.arange(0, N)
+    ranks[sorted_idx] = np.arange(1, N+1)
 
     # 4) compute weight ∝ 1 / (κ·N + rank)
     denom = kappa * N + ranks

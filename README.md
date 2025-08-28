@@ -39,7 +39,7 @@ python -m in_virtuo_gen.generate \
 
 **Reproduce Quality-Diversity Analysis:**
 ![Quality vs Diversity](plots/quality_vs_diversity.png)
-
+(~6h on RTX 4090 for 3 seeds)
 ```bash
 python -m in_virtuo_gen.evaluation.denovo \
     --outdir plots \
@@ -52,6 +52,7 @@ python -m in_virtuo_gen.evaluation.denovo \
 ```
 
 ### 2. Fragment-Constrained Generation
+(<1h on RTX 4090 for 3 seeds)
 
 Design molecules containing specific fragments while optimizing properties.
 ![Motif Extension](plots/downstream/motif_samples.png)
@@ -87,7 +88,7 @@ python -m in_virtuo_reinforce.preprocess.get_vocab \
     --outpath in_virtuo_reinforce/vocab/zinc250k.csv
 ```
 
-**Run Optimization (~24h on RTX 4090):**
+**Run Optimization (~36h on RTX 4090 for 3 seeds):**
 ```bash
 # Standard benchmark
 python -m in_virtuo_reinforce.genetic_ppo \
@@ -99,8 +100,8 @@ python -m in_virtuo_reinforce.genetic_ppo \
 # With ZINC250k prescreening
 python -m in_virtuo_reinforce.genetic_ppo \
     --device 0 --start_t 0.0 --offspring_size 100 \
-    --max_oracle_calls 10000 --num_reinforce_steps 30 \
-    --clip_eps 0.2 --use_prompter --use_mut --train_mut \
+    --max_oracle_calls 10000 --num_reinforce_steps 10 \
+    --clip_eps 0.5 --use_prompter --use_mut --train_mut \
     --dt 0.01 --experience 28 --use_prescreen
 ```
 
@@ -132,7 +133,7 @@ python -m in_virtuo_reinforce.genetic_ppo \
 
 | Oracle Task | InVirtuoGen | GenMol | f-RAG |
 |-------------|:-----------:|:------:|:-----:|
-| **Total Score** | **19.167** | 18.362 | 16.928 |
+| **Total Score** | **18.745** | 18.362 | 16.928 |
 
 
 ## 🔬 Technical Innovation
@@ -162,21 +163,8 @@ python -m in_virtuo_reinforce.genetic_ppo \
 
 ## 📄 Citation
 
-```bibtex
-@article{kaech2025invirtuo,
-  title={From Completion to Refinement: Uniform-Source Discrete Flows for Drug Discovery},
-  author={Kaech, Benno and Wyss, Luis and Borgwardt, Karsten and Grasso, Gianvito},
-  journal={arXiv preprint arXiv:placeholder},
-  year={2025}
-}
-```
+To BE DONE
 
 ## 📧 Contact
 
-For questions or collaboration opportunities:
-- **Benno Kaech** - In Virtuo Laboratories SA benno@invrtuolabs.com
-
-
-## 📜 License
-
-Licensed under CC-by-NC 4.0. See [LICENSE](LICENSE) for details.
+AFTER UNBLINDING
