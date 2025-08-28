@@ -85,7 +85,7 @@ def ids_to_smiles(
 
 
 def evaluate_smiles(
-    generated_ids, tokenizer, return_values=False, print_flag=True, exclude_salts=True, num_calc=1000, already_smiles=False, print_metrics=True, device="cuda:0", return_unique_indices=False
+    generated_ids, tokenizer, return_values=False, print_flag=True, exclude_salts=True, num_calc=1000, already_smiles=False, print_metrics=True, device="cuda:0", return_unique_indices=False, **kwargs
 ):
     num_samples = len(generated_ids)
     num_calc = min(num_calc, len(generated_ids))
