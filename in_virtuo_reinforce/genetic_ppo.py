@@ -201,7 +201,11 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         self.seq_prior_probs = loaded["probs"]
         self.seq_len_dist = Categorical(self.seq_prior_probs.clone())
         # Initialize bandit
-        self.bandit = SoftmaxBandit(prior_probs=self.seq_prior_probs.cpu().numpy(), lengths=self.seq_lengths, lr=self.config.lr, beta=self.config.beta)
+        if self.config.use_prescreen:
+            mean=pd.read_csv("in_virtuo_reinforce/vocab/zinc250k.csv").sort_values(by=self.config.oracle, ascending=False)[: self.config.first_pop_size][self.config.oracle].mean()
+        else:
+            mean=0.0
+        self.bandit = SoftmaxBandit(prior_probs=self.seq_prior_probs.cpu().numpy(), lengths=self.seq_lengths, lr=self.config.lr, beta=self.config.beta, mean_reward=mean)
 
         # Initialize prompter if needed
         if self.config.use_prompter:
@@ -259,7 +263,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         elif novelty > 0.1 and self.c_neg > 0:
             self.c_neg = 0
             self.config.c_neg *= 0.9
-        elif novelty < 0.1:
+        elif novelty < 0.01:
             self.c_neg = 0
             self.config.c_neg *= 0.9
             self.stop_counter += 1
@@ -292,7 +296,10 @@ class InVirtuoFMOptimizer(BaseOptimizer):
                     break
 
                 smi, tries_temp = reproduce(selected_parent, 1)
-                smi = Chem.MolToSmiles(Chem.MolFromSmiles(smi))
+                try:
+                    smi = Chem.MolToSmiles(Chem.MolFromSmiles(smi))
+                except:
+                    pass
                 tries += tries_temp + i_
                 if smi and smi not in self.mol_buffer:
                     score = self.oracle(smi)
@@ -396,7 +403,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             source_masks_list = []
             for i in range(self.config.num_reinforce_steps):
                 current_t = (t_roll/10 + i * (1.0 - self.config.start_t) / self.config.num_reinforce_steps) % 1
-                old_lp, _, x_t, source_mask = self.compute_logprobs(ids, uni, current_t, prior=False)
+                old_lp, _, x_t, source_mask = self.compute_logprobs(ids, uni, current_t, prior=True)
                 old_logprobs.append(old_lp.detach().unsqueeze(1))
                 x_ts_list.append(x_t.unsqueeze(1))
                 source_masks_list.append(source_mask.unsqueeze(1).clone())
@@ -518,7 +525,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         """
         B = int(self.config.first_pop_size * 1.1)  # generate more samples to ensure we have enough valid ones
 
-        n_oracle = [67 if self.config.oracle=="valsartan_smarts" and not self.config.use_prescreen else self.bandit.select_length() for _ in range(int(B))] #
+        n_oracle = [ self.bandit.select_length() for _ in range(int(B))] #
 
         samples, init_ids = self.model.sample(num_samples=B, temperature=1.0 if self.prev_novelty>0.5 else 1.5, noise=0.0, oracle=n_oracle, eta=1, return_uni=True, vocab_mask=self.vocab_mask,)
         valid, smiles, _ = evaluate_smiles(
@@ -542,7 +549,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             df = pd.read_csv("in_virtuo_reinforce/vocab/zinc250k.csv").sort_values(by=self.config.oracle, ascending=False)[: self.config.first_pop_size]
 
             print(f"Loaded {len(smiles)} ZINC SMILES")
-            samples = [torch.tensor(self.tokenizer.encode(" ".join(decompose_smiles(sm, max_frags=self.config.max_frags)))) for sm in smiles] + samples
+            samples = [torch.tensor(self.tokenizer.encode(" ".join(decompose_smiles(sm, max_frags=self.config.max_frags)))) for sm in df["smiles"].values.tolist()] + samples
             smiles = df["smiles"].values.tolist() + smiles
             scores = df[self.config.oracle].values.tolist() + scores
             assert len(samples) == len(smiles)
@@ -580,7 +587,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         else:
             prompts = None
             for i in range(num_samples):
-                n_oracle.append(67 if self.config.oracle.find("smarts") != -1 and not self.config.use_prescreen else self.bandit.select_length()) #self.b andit.select_length()
+                n_oracle.append( self.bandit.select_length()) #self.b andit.select_length()
         with torch.autocast(self.device.type, dtype=torch.float16, enabled=self.device.type == "cuda"):
             all_seqs, all_x_0 = self.model.sample(
                 prompt=prompts,
@@ -632,6 +639,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             assert len(self.train_ids) == self.config.offspring_size, f"len(self.train_ids) = {len(self.train_ids)}"
             self.used_mutation = False
             self.reinforce([item for item in self.train_ids], [item for item in self.train_scores], [item for item in self.train_x_0])  # type: ignore[attr-defined]
+            self.prior.model = copy.deepcopy(self.model.model)
 
             new_experience = []
             for i in range(len(self.train_ids)):
@@ -664,7 +672,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         self.initialize_population()
         while not self.finish:
             self.evolve_population()
-            if (sum([x[0] for x in sorted(list(self.mol_buffer.values()), reverse=True)[:10]]) >= 9.99) or self.stop_counter == 10:
+            if (sum([x[0] for x in sorted(list(self.mol_buffer.values()), reverse=True)[:10]]) >= 9.99) or self.stop_counter == 100:
                 if self.config.no_stop:
                     self.config.num_reinforce_steps = 0
                     self.config.offspring_size = 500

@@ -257,6 +257,7 @@ class SoftmaxBandit:
         lengths,  # list/array of actual lengths
         lr=0.1,  # Q-learning rate
         beta=0.95,  # how strongly to stick to old prior
+        mean_reward=0.0,
     ):
         self.prior = np.array(prior_probs, dtype=float)
         assert np.all(self.prior >= 0) and abs(self.prior.sum() - 1.0) < 1e-6
@@ -266,14 +267,18 @@ class SoftmaxBandit:
         self.max_length = self.lengths.max()
         self.lr = lr
         self.beta = beta
-        self.Q = np.ones_like(self.prior)*0.5
+        self.Q = np.ones_like(self.prior)*mean_reward
+        self.mean_reward = mean_reward
 
         self._history = []
 
     def _compute_probs(self):
         logits = np.log(self.prior + 1e-8) + (self.Q )
         e = np.exp(logits - logits.max())
-        return e / e.sum()
+        probs = e / e.sum()
+        # Ensure minimum 1% probability per arm
+        probs = 0.95 * probs + 0.05 / len(probs)
+        return probs
 
     def select_length(self):
         p = self._compute_probs()
@@ -286,7 +291,7 @@ class SoftmaxBandit:
         length = min(length, self.max_length)
         arm = self.index_of[length]
         self.Q[arm] += self.lr * (reward - self.Q[arm])
-        self.Q *= 0.999  # Small decay factor
+
         # 2) compute new posterior p
         # p = self._compute_probs()
 
@@ -298,62 +303,57 @@ class SoftmaxBandit:
         return self._compute_probs()
 
     def plot_distribution(self, save_path=None, log_wandb=False, global_step=0, smiles_list=None):
-        p_cur = self._compute_probs()  # Use _compute_probs() instead of current_probs()
+        p_cur = self._compute_probs()
+
         x = self.lengths
-        w = 0.5
+        w = 0.8
 
-        pastel_colors = ["#AEC6CF", "#FFB347", "#98D8C8"]  # Added a third color for Q values
+        pastel_colors = ["#AEC6CF", "#FFB347", "#98D8C8"]
 
-        fig, axs = plt.subplots(1, 3, figsize=(12, 4), sharey=False)
+        fig, axs = plt.subplots(1, 3, figsize=(12, 4))
 
-        # Actual length distribution from generated SMILES
+        # Panel 1: Actual generated lengths histogram
         if smiles_list:
             lengths = [len(s) for s in smiles_list]
-            axs[0].hist(lengths, bins=max(lengths)-min(lengths), color=pastel_colors[0], edgecolor="gray")
-        axs[0].set_title("Generated Length Distribution")
+            axs[0].hist(lengths, bins=range(min(lengths), max(lengths)+2),
+                        color=pastel_colors[0], edgecolor="gray", alpha=0.7)
+        axs[0].set_title("Generated Lengths")
         axs[0].set_xlabel("Sequence length")
-        axs[0].set_ylabel("Frequency")
+        axs[0].set_ylabel("Count")
 
-        # Initial prior (unchanged)
-        axs[1].bar(x, self.prior, color=pastel_colors[0], edgecolor="gray", width=w)
+        # Panel 2: Initial prior distribution
+        axs[1].bar(x, self.prior, color=pastel_colors[1], edgecolor="gray", width=w, alpha=0.7)
         axs[1].set_title("Initial Prior π₀")
         axs[1].set_xlabel("Sequence length")
         axs[1].set_ylabel("Probability")
 
-        # Current distribution (prior + Q)
-        axs[2].bar(x, p_cur, color=pastel_colors[1], edgecolor="gray", width=w)
-        # Overlay Q values as a line plot to show adjustments
-        ax2_twin = axs[2].twinx()
-        ax2_twin.plot(x, self.Q, 'o-', color='red', alpha=0.6, label='Q values')
-        ax2_twin.set_ylabel('Q value', color='red')
-        ax2_twin.tick_params(axis='y', labelcolor='red')
-        ax2_twin.axhline(y=0, color='red', linestyle='--', alpha=0.3)
-
-        axs[2].set_title(f"Current π (Prior + Q)")
+        # Panel 3: Current sampling distribution
+        axs[2].bar(x, p_cur, color=pastel_colors[2], edgecolor="gray", width=w, alpha=0.7)
+        axs[2].set_title("Current Sampling π")
         axs[2].set_xlabel("Sequence length")
         axs[2].set_ylabel("Probability")
 
-        # Adjust y-limits for probability plots
-        max_prob = max(self.prior.max(), p_cur.max())
-        axs[1].set_ylim(0, max_prob * 1.1)
-        axs[2].set_ylim(0, max_prob * 1.1)
+        # Make y-axes consistent for the two probability plots
+        max_prob = max(self.prior.max(), p_cur.max()) * 1.1
+        axs[1].set_ylim(0, max_prob)
+        axs[2].set_ylim(0, max_prob)
 
-        # Add grids
+        # Light grid for readability
         for ax in axs:
             ax.grid(axis="y", linestyle="--", alpha=0.3)
+            ax.set_axisbelow(True)
 
+        plt.suptitle(f"Length Distribution Evolution (Step {global_step})", fontsize=12)
         plt.tight_layout()
 
         if log_wandb and wandb.run:
             wandb.log({"bandit_distribution": wandb.Image(plt)}, step=global_step)
 
         if save_path:
-            plt.savefig(save_path)
+            plt.savefig(save_path, dpi=100, bbox_inches='tight')
             plt.close()
         else:
             plt.show()
-
-
 
 
 class GeneticPrompter:
@@ -547,7 +547,7 @@ def rank_based_sampling(smiles_scores: Dict[str, float], n_select: int, kappa: f
     # 3) assign ranks (best rank=1, second=2, ..., worst=N)
     ranks = np.empty(N, dtype=np.int64)
 
-    ranks[sorted_idx] = np.arange(1, N+1)
+    ranks[sorted_idx] = np.arange(0, N)
 
     # 4) compute weight ∝ 1 / (κ·N + rank)
     denom = kappa * N + ranks
