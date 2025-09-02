@@ -388,48 +388,59 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         """
         return torch.nn.utils.rnn.pad_sequence(ids, batch_first=True, padding_value=self.model.pad_token_id).to(self.device)
 
-    def construct_rollout_ds(self, ids, scores, uni):
-        """
-        Construct the rollout dataset.
-        Note that the logprobs needs to be precomputed because we cant evaluate the whole trajectory at once like in a LLM
-        """
-        ids = self.pad_seqs([torch.tensor(i) for i in ids]).to(self.device)
-        uni = self.pad_seqs([torch.tensor(u) if self.config.no_sample_uni else torch.randint(4, 203, (len(u),), device=self.device) for u in uni]).to(self.device)
-        scores = torch.tensor(scores, device=self.device)
-        t_roll = torch.rand(len(ids), device=self.device) * (1 - self.config.start_t) + self.config.start_t if self.config.use_prompter else torch.rand(len(ids), device=self.device)
-        # Pre-compute old logprobs AND masks for each timestep
-        with torch.no_grad():
-            old_logprobs = []
-            x_ts_list = []
-            source_masks_list = []
-            for i in range(self.config.num_reinforce_steps):
-                current_t = (t_roll/10 + i * (1.0 - self.config.start_t) / self.config.num_reinforce_steps) % 1
-                old_lp, _, x_t, source_mask = self.compute_logprobs(ids, uni, current_t, prior=True)
-                old_logprobs.append(old_lp.detach().unsqueeze(1))
-                x_ts_list.append(x_t.unsqueeze(1))
-                source_masks_list.append(source_mask.unsqueeze(1).clone())
-            old_logprobs = torch.cat(old_logprobs, dim=1)
-            x_ts_all = torch.cat(x_ts_list, dim=1)
-            source_masks_all = torch.cat(source_masks_list, dim=1)
-        return TensorDataset(ids, scores, uni, t_roll, old_logprobs, x_ts_all, source_masks_all)
 
+    def construct_dataset(self, ids, scores, uni, timesteps=10):
+        ids_tensor = self.pad_seqs([i.clone().detach() for i in ids]).to(self.device)
+        uni_tensor = self.pad_seqs([torch.tensor(u) if  self.config.no_sample_uni else
+                                    torch.randint(4, 203, (len(u),), device=self.device) for u in uni]).to(self.device)
+        scores_tensor = torch.tensor(scores, device=self.device)
+        old_logprobs,x_ts_list,source_masks_list,t_list = [],[],[],[]
+        t_roll = torch.rand(len(ids_tensor), device=self.device)
+        for i in range(timesteps):
+            current_t = (t_roll / 10 + i * (1.0 - self.config.start_t) / timesteps) % 1
+            old_lp, _, x_t, source_mask = self.compute_logprobs(ids_tensor, uni_tensor, current_t, prior=True)
+            old_logprobs.append(old_lp.detach().unsqueeze(1))
+            x_ts_list.append(x_t.unsqueeze(1).clone())
+            source_masks_list.append(source_mask.unsqueeze(1).clone().to(self.device))
+            t_list.append(current_t)
+        ids_tensor = ids_tensor.repeat(timesteps, 1)
+        scores_tensor = scores_tensor.repeat(timesteps)
+        uni_tensor = uni_tensor.repeat(timesteps, 1)
+        old_logprobs = torch.cat(old_logprobs, dim=0).squeeze(1)
+        x_ts_all = torch.cat(x_ts_list, dim=0).squeeze(1)
+        source_masks_all = torch.cat(source_masks_list, dim=0).squeeze(1)
+        t_list = torch.cat(t_list, dim=0)
+        # Create dataset for new samples
+        new_dataset = TensorDataset(
+            ids_tensor, scores_tensor, uni_tensor, old_logprobs, x_ts_all, source_masks_all,
+            t_list
+        )
+        return new_dataset
     def construct_loader(self, ids, scores, uni):
-        """
-        Construct the loader for the PPO training.
-        """
-
-        scores = torch.tensor(scores, device=self.device)
-        rollout_ds = self.construct_rollout_ds(ids, scores, uni)
+        # Prepare data
+        new_dataset = self.construct_dataset(ids, scores, uni)
+        datasets = [new_dataset]
+        # Add experience dataset if available
 
         if len(self.experience) >= self.config.experience_replay_size and self.config.experience_replay_size > 0:
-            exp_seqs, exp_scores, exp_uni = self.experience.sample(self.config.experience_replay_size)
-            exp_ds = self.construct_rollout_ds(exp_seqs, exp_scores, exp_uni)
-            train_ds = ConcatDataset([rollout_ds, exp_ds])
-        else:
-            train_ds = rollout_ds
+            exp_seqs, exp_scores, exp_uni = self.experience.sample(
+                    min(len(self.experience), self.config.experience_replay_size)
+                )
+            exp_dataset = self.construct_dataset(exp_seqs, exp_scores, exp_uni, timesteps=self.config.num_reinforce_steps//2)
+            datasets.append(exp_dataset)
+
+        # Combine datasets
+        combined_dataset = ConcatDataset(datasets)
+
+        # Create loader
         loader = DataLoader(
-            train_ds, batch_size=min(self.config.offspring_size + self.config.experience_replay_size, 128), shuffle=True, collate_fn=pad_collate_with_masks, drop_last=False
-        )  # Need to update this too
+            combined_dataset,
+            batch_size=min(self.config.offspring_size + self.config.experience_replay_size, 128),
+            shuffle=True,
+            collate_fn=custom_collate,
+            drop_last=False
+        )
+
         return loader
 
     def compute_logprobs(self, ids, uni, t, prior=False, x_t=None, source_mask=None):
@@ -449,6 +460,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
 
         # Get logits
         with torch.no_grad() if prior else nullcontext():
+            self.prior.train()
             logits = self.prior.model(x=x_t, t=t, attn_mask=attn, return_hidden=False) if prior else self.model.model(x=x_t, t=t, attn_mask=attn, return_hidden=False)
             logprobs_ = compute_seq_logp(logits, ids, source_mask.float())
 
@@ -466,35 +478,27 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         self.model.train()
 
         loader = self.construct_loader(ids, scores, uni)
-        for i in range(self.config.num_reinforce_steps):
-            for batch_ids, batch_scores, batch_uni, batch_t, batch_old_lp, batch_x_ts, batch_masks in loader:  #
-                self.model_opt.zero_grad()
-                self.lr_scheduler.step()
 
-                # Extract pre-computed values for this epoch
-                batch_old_lp_i = batch_old_lp[:, i]
-                batch_x_t_i = batch_x_ts[:, i]
-                batch_mask_i = batch_masks[:, i]
-                current_t = (batch_t + i * (1.0 - self.config.start_t) / self.config.num_reinforce_steps) % 1.0
+        for batch_ids, batch_scores, batch_uni, batch_t, batch_old_lp, batch_x_ts, batch_masks in loader:
+            self.model_opt.zero_grad()
+            self.lr_scheduler.step()
 
-                # Compute new logprobs with SAME mask
-                agent_lp, entropy, _, _ = self.compute_logprobs(batch_ids, batch_uni, current_t, prior=False, x_t=batch_x_t_i, source_mask=batch_mask_i)
-                ratio = torch.exp((agent_lp - batch_old_lp_i))
-                # More robust advantage calculation
-                score_std = batch_scores.std()
-                if batch_scores.numel() > 1 and not score_std < 1e-8:
-                    adv = (batch_scores - batch_scores.mean()) / (score_std + 1e-8)
-                else:
-                    adv = torch.zeros_like(batch_scores)
-                #reduce weight of negative samples
-                adv = torch.where(adv > 0, adv, self.c_neg * adv)#.clamp(min=-1, max=1)
+            agent_lp, entropy, _, _ = self.compute_logprobs(batch_ids, batch_uni, batch_t, prior=False, x_t=batch_x_ts, source_mask=batch_masks)
+            ratio = torch.exp((agent_lp - batch_old_lp))
+            score_std = batch_scores.std()
+            if batch_scores.numel() > 1 and not score_std < 1e-8:
+                adv = (batch_scores - batch_scores.mean()) / (score_std + 1e-8)
+            else:
+                adv = torch.zeros_like(batch_scores)
+                continue
+            adv = torch.where(adv > 0, adv, self.c_neg * adv)
 
             surr1 = ratio * adv
             surr2 = torch.clamp(ratio, 1 - self.config.clip_eps, 1 + self.config.clip_eps) * adv
             pg_loss = -torch.min(surr1, surr2).mean()
             loss = pg_loss - 0.01 * entropy.mean()
 
-            if torch.isnan(loss) or torch.isinf(loss) or pg_loss.sum() == 0:
+            if torch.isnan(loss) or torch.isinf(loss):
                 continue
 
             loss.backward()
@@ -579,7 +583,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
 
     def generate_offspring_batch(self):
         n_oracle = []
-        num_samples = min(200,int((self.config.offspring_size-len(self.train_ids)) // max(self.prev_validity,0.01)))*1.1
+        num_samples = int(min(200,int((self.config.offspring_size-len(self.train_ids)) // max(self.prev_validity,0.01)))*1.1)
         if (self.config.use_prompter and  max(self.scores)>0): #or self.config.use_prescreen:
             self.prompter.offspring_size = num_samples
             prompts, n_oracle = self.prompter.build_prompts_and_masks(dev=self.device)
