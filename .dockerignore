@@ -1,0 +1,8 @@
+# ignore big result dirs
+results/
+wandb/
+*.log
+*.out
+*.tmp
+__pycache__/
+*.pyc
