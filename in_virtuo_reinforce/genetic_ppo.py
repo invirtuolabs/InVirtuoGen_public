@@ -315,7 +315,8 @@ class InVirtuoFMOptimizer(BaseOptimizer):
                             self.train_ids.append(new_seq)
                             self.train_scores.append(score)
                             self.train_x_0.append(torch.randint(4, 203, (len(new_seq),)))
-                            self.prompter.update_with_score(smi, score)
+                            if self.config.use_prompter:
+                                self.prompter.update_with_score(smi, score)
                         new_smiles += 1
                         break
 
@@ -570,7 +571,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         self.train_ids = [s[s != self.model.pad_token_id] for s in samples]
         self.train_x_0 = [i[: len(s)] for i, s in zip(init_ids, self.train_ids)]
         self.train_scores = scores
-        if max(self.train_scores)>0 and len(self.train_ids)>=self.config.first_pop_size//2:
+        if max(self.train_scores)>0 and len(self.train_ids)>=self.config.first_pop_size//2 and self.config.num_reinforce_steps > 0:
             self.reinforce([item for item in self.train_ids], [item for item in self.train_scores], [item for item in self.train_x_0])
             self.add_experience()
         self.prior.model = copy.deepcopy(self.model.model)
@@ -578,7 +579,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
 
     def generate_offspring_batch(self):
         n_oracle = []
-        num_samples = min(5000,int((self.config.offspring_size-len(self.train_ids)) // max(self.prev_validity,0.01)))
+        num_samples = min(200,int((self.config.offspring_size-len(self.train_ids)) // max(self.prev_validity,0.01)))*1.1
         if (self.config.use_prompter and  max(self.scores)>0): #or self.config.use_prescreen:
             self.prompter.offspring_size = num_samples
             prompts, n_oracle = self.prompter.build_prompts_and_masks(dev=self.device)
