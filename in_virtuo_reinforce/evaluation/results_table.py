@@ -26,7 +26,7 @@ for task in sorted(os.listdir(args.results_root)):
         continue
     df = pd.read_csv(csv_path)
     all_runs_data[task] = df["auc_top10"].values
-    mean10 = df["auc_top10"].mean()
+    mean10 = df["auc_top10"].mean() if args.include_std else df["auc_top10"][0]
     std10 = df["auc_top10"].std(ddof=0)
     rows.append((task, mean10, std10))
 
@@ -124,7 +124,7 @@ for _, row in merged.iterrows():
         def fmt(x): return f"{x:.3f}"
         is_within = args.include_std and (max_std is not None) and (v >= max_val - max_std) and (i != max_idx)
         if i == max_idx:
-            row_fmt.append(f"$\\mathbf{{{fmt(v)} \\pm {fmt(s)}}}$" if args.include_std and s is not None else f"$\\mathbf{{{fmt(v)}}}$")
+            row_fmt.append(f"$\\mathbf{{{fmt(v)} \\pm {fmt(s)}}}$" if args.include_std and s is not None and s>0 else f"$\\mathbf{{{fmt(v)}}}$")
         elif is_within:
             row_fmt.append(f"$\\mathbf{{{fmt(v)} \\pm {fmt(s)}}}$" if args.include_std and s is not None else f"$\\mathbf{{{fmt(v)}}}$")
         else:
