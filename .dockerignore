@@ -1,6 +1,10 @@
 # ignore big result dirs
 results/
 wandb/
+checkpoints/
+logs/
+array.sh/
+run.sbatch
 *.log
 *.out
 *.tmp

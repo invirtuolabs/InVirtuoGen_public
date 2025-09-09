@@ -8,6 +8,7 @@ parser.add_argument("--results_root", type=str, default="lead_optimization")
 parser.add_argument("--reference_table", type=str, default="references/reference_pmo.csv")
 parser.add_argument("--exclude_prescreen", action="store_true", help="Exclude GenMol and f-RAG from the table")
 parser.add_argument("--include_std", action="store_true", help="Include standard deviations in the table")
+parser.add_argument("--predicted_auc", action="store_true", help="Use predicted AUC instead of top10 AUC")
 args = parser.parse_args()
 
 # Collect stats for "InVirtuoGen"
@@ -25,9 +26,9 @@ for task in sorted(os.listdir(args.results_root)):
     if not csv_path or not os.path.isfile(csv_path):
         continue
     df = pd.read_csv(csv_path)
-    all_runs_data[task] = df["auc_top10"].values
-    mean10 = df["auc_top10"].mean() if args.include_std else df["auc_top10"][0]
-    std10 = df["auc_top10"].std(ddof=0)
+    all_runs_data[task] = df["auc_top10"].values if not args.predicted_auc else df["predicted_auc"].values
+    mean10 = df["auc_top10"].mean()  if not args.predicted_auc else df["predicted_auc"].mean() if args.include_std else df["auc_top10"][0]
+    std10 = df["auc_top10"].std(ddof=0) if not args.predicted_auc else df["predicted_auc"].std(ddof=0) 
     rows.append((task, mean10, std10))
 
 summary = pd.DataFrame(rows, columns=["Oracle", "mean10", "std10"])

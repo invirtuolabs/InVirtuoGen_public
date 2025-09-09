@@ -64,7 +64,7 @@ class PromptTimeDataset(Dataset):
 
 def make_dataloader(base_dataset, start_t, dt, batch_size, **dl_kwargs):
     ds = PromptTimeDataset(base_dataset, start_t, dt)
-    return DataLoader(ds, batch_size=batch_size, shuffle=True, **dl_kwargs)
+    return DataLoader(ds, batch_size=batch_size, shuffle=False, **dl_kwargs)
 
 
 def visualize_top_smiles(smiles_list, top_n=10, target="CC(C)(C)NCC(C1=CC(=C(C=C1)O)CO)O", prompts=False, pairs=False, scores=None, oracle_name="", device=0, prefix=""):
@@ -715,7 +715,7 @@ class GeneticPrompter:
         for _ in range(self.offspring_size):
 
 
-            i1, i2 = rank_based_sampling(self.vocab, 2, kappa=self.kappa)
+            i1, i2 = rank_based_sampling(self.vocab, 2, kappa=self.kappa, start_rank=self.start_rank    )
             i1 = torch.tensor(i1)
             i2 = torch.tensor(i2)
             p1_list.append(i1)
@@ -754,7 +754,7 @@ class GeneticPrompter:
         return self.tokenizer.encode(kept)[:n_oracle]#
 
 
-def rank_based_sampling(smiles_scores: Dict[str, float], n_select: int, kappa: float = 0.1) -> List[str]:
+def rank_based_sampling(smiles_scores: Dict[str, float], n_select: int, kappa: float = 0.1, start_rank: int = 0) -> List[str]:
     """
     Rank‐based sampling without replacement over a smiles→score dict.
 
@@ -780,7 +780,7 @@ def rank_based_sampling(smiles_scores: Dict[str, float], n_select: int, kappa: f
     # 3) assign ranks (best rank=1, second=2, ..., worst=N)
     ranks = np.empty(N, dtype=np.int64)
 
-    ranks[sorted_idx] = np.arange(0, N)
+    ranks[sorted_idx] = np.arange(start_rank, N+start_rank)
 
     # 4) compute weight ∝ 1 / (κ·N + rank)
     denom = kappa * N + ranks

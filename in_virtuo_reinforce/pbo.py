@@ -135,9 +135,9 @@ class Oracle:
 
         print(f"{n_calls}/{self.max_oracle_calls} | ")
         current_auc = top_auc(self.mol_buffer, 10, finish, self.freq_log, self.max_oracle_calls) * n_calls
-        remaining_frac = self.max_oracle_calls - n_calls
-        best_reachable_auc = (current_auc + remaining_frac) / self.max_oracle_calls
-        predicted_auc = (current_auc + remaining_frac*avg_top10)/self.max_oracle_calls
+        remaining_frac = 10000 - n_calls
+        best_reachable_auc = (current_auc + remaining_frac) / 10000
+        predicted_auc = (current_auc + remaining_frac*avg_top10)/10000
         if torch.isclose(torch.tensor(self.predicted_auc).float(), torch.tensor(predicted_auc).float(), atol=1e-3):
             self.same_auc += 1
         else:
@@ -173,7 +173,7 @@ class Oracle:
         plt.xlabel("Number of oracle calls")
         plt.ylabel("Average top-10 score")
         plt.title("Average top-10 score vs number of oracle calls, AUC: {:.2f}".format(current_auc / n_calls))
-        plt.xlim(0, 10000)
+        plt.xlim(0, self.max_oracle_calls)
         print(self.name)
         os.makedirs(f"plots/tdc/{self.name}", exist_ok=True)
         plt.savefig(f"plots/tdc/{self.name}/tdc_avg_top10{self.device}.png", format="png")
@@ -305,8 +305,8 @@ class BaseOptimizer:
         assert len(self.mol_buffer) > 0
 
         results = list(sorted(self.mol_buffer.items(), key=lambda kv: kv[1][1], reverse=False))
-        if len(results) > 10000:
-            results = results[:10000]
+        if len(results) > self.max_oracle_calls:
+            results = results[:self.max_oracle_calls]
 
         results_all_level = []
         for n_o in log_num_oracles:
@@ -323,7 +323,7 @@ class BaseOptimizer:
         best_score = max(val[0] for val in self.mol_buffer.values())
         auc10  = top_auc(self.mol_buffer, 10, False, self.freq_log, self.max_oracle_calls)
         auc100 = top_auc(self.mol_buffer, 100, False, self.freq_log, self.max_oracle_calls)
-
+        predicted_auc = self.oracle.predicted_auc
         # 2) Prepare output path
         out_dir = os.path.join(self.output_dir, self.oracle.name)
         os.makedirs(out_dir, exist_ok=True)
@@ -334,7 +334,7 @@ class BaseOptimizer:
         if os.path.exists(out_path):
             df = pd.read_csv(out_path)
         else:
-            df = pd.DataFrame(columns=["timestamp", "best_score", "auc_top10", "auc_top100"])
+            df = pd.DataFrame(columns=["timestamp", "best_score", "auc_top10", "auc_top100", "predicted_auc"])
 
         # 4) Append new row
         new_row = {
@@ -342,6 +342,7 @@ class BaseOptimizer:
             "best_score":  best_score,
             "auc_top10":   auc10,
             "auc_top100":  auc100,
+            "predicted_auc": predicted_auc,
             "seed":        self.seed
         }
         df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
