@@ -8,7 +8,6 @@ parser.add_argument("--results_root", type=str, default="lead_optimization")
 parser.add_argument("--reference_table", type=str, default="references/reference_pmo.csv")
 parser.add_argument("--exclude_prescreen", action="store_true", help="Exclude GenMol and f-RAG from the table")
 parser.add_argument("--include_std", action="store_true", help="Include standard deviations in the table")
-parser.add_argument("--predicted_auc", action="store_true", help="Use predicted AUC instead of top10 AUC")
 args = parser.parse_args()
 
 # Collect stats for "InVirtuoGen"
@@ -26,9 +25,9 @@ for task in sorted(os.listdir(args.results_root)):
     if not csv_path or not os.path.isfile(csv_path):
         continue
     df = pd.read_csv(csv_path)
-    all_runs_data[task] = df["auc_top10"].values if not args.predicted_auc else df["predicted_auc"].values
-    mean10 = df["auc_top10"].mean()  if not args.predicted_auc else df["predicted_auc"].mean() if args.include_std else df["auc_top10"][0]
-    std10 = df["auc_top10"].std(ddof=0) if not args.predicted_auc else df["predicted_auc"].std(ddof=0) 
+    all_runs_data[task] = df["auc_top10"].values
+    mean10 = df["auc_top10"].mean() if args.include_std else df["auc_top10"][0]
+    std10 = df["auc_top10"].std(ddof=0) if args.include_std else 0
     rows.append((task, mean10, std10))
 
 summary = pd.DataFrame(rows, columns=["Oracle", "mean10", "std10"])
@@ -62,8 +61,7 @@ else:
 # Create missing std columns as NaN
 for method in ref_methods:
     std_col = f"{method}_std"
-    if std_col not in reference.columns:
-        reference[std_col] = np.nan
+    reference[std_col] = np.nan
 
 # Create missing sum std columns as NaN
 for method in ref_methods:
@@ -72,12 +70,11 @@ for method in ref_methods:
         reference[sum_std_col] = np.nan
 
 merged = pd.merge(summary, reference, on="Oracle", how="left")
-
 if args.exclude_prescreen:
     methods = ["mean10", "Genetic GFN", "Mol GA", "REINVENT", "Graph GA"]
     std_methods = ["std10", "Genetic GFN_std", "Mol GA_std", "REINVENT_std", "Graph GA_std"]
     sum_std_methods = ["invirtuo_sum_std", "Genetic GFN_sum_std", "Mol GA_sum_std", "REINVENT_sum_std", "Graph GA_sum_std"]
-    latex_headers = ["InVirtuoGen", "Gen. GFN", "Mol GA", "REINVENT", "Graph GA"]
+    latex_headers = ["InVirtuoGen (no prescreen)", "Gen. GFN", "Mol GA", "REINVENT", "Graph GA"]
 else:
     methods = ["mean10", "GenMol", "f-RAG"]
     std_methods = ["std10", "GenMol_std", "f-RAG_std"]
@@ -93,13 +90,13 @@ if args.exclude_prescreen:
         caption += r" with standard deviations"
     caption += r". The best results are highlighted in bold. Values within one standard deviation of the best are also marked in bold. The results for Genetic GFN \citep{kim2024geneticguidedgflownetssampleefficient} and Mol GA \citep{tripp2023geneticalgorithmsstrongbaselines} are taken from the respective papers. The other results are taken from the original PMO benchmark paper by \citep{gao2022sampleefficiencymattersbenchmark}.}"
 else:
-    caption = r"\caption{Comparison of models that initialize by screening ZINC250k on the PMO benchmark. We report the AUC-top10 scores, averaged over three runs"
+    caption = r"\caption{Comparison of models on the PMO benchmark that screen ZINC250k before initialization. We report the AUC-top10 scores, averaged over three runs"
     if args.include_std:
         caption += r" with standard deviations"
     caption += r". Best results and those within one standard deviation of the best are indicated in bold. The scores for $f$-RAG \citep{lee2024moleculegenerationfragmentretrieval} and GenMol \cite{genmol} are taken from the respective publications.}"
 latex.append(caption)
 latex.append(r"\label{tab:our_vs_baselines} " if not args.exclude_prescreen else r"\label{tab:prescreened}")
-latex.append(r"\begin{tabularx}{\linewidth}{l|C "+("Y " * (len(methods)-1))+"}")
+latex.append(r"\begin{tabularx}{\linewidth}{l|p{2.2cm} "+("Y " * (len(methods)-1))+"}")
 latex.append(r"\toprule")
 latex.append("Oracle & " + " & ".join(latex_headers) + r" \\")
 latex.append(r"\midrule")
@@ -125,12 +122,12 @@ for _, row in merged.iterrows():
         def fmt(x): return f"{x:.3f}"
         is_within = args.include_std and (max_std is not None) and (v >= max_val - max_std) and (i != max_idx)
         if i == max_idx:
-            row_fmt.append(f"$\\mathbf{{{fmt(v)} \\pm {fmt(s)}}}$" if args.include_std and s is not None and s>0 else f"$\\mathbf{{{fmt(v)}}}$")
+            row_fmt.append("$\mathbf{"+ fmt(v) + "}$" + " {\\tiny (" + "$\\pm$ " + f"{fmt(s)}"  + ")}" if args.include_std and s is not None else f"$\\mathbf{{{fmt(v)}}}$")
         elif is_within:
-            row_fmt.append(f"$\\mathbf{{{fmt(v)} \\pm {fmt(s)}}}$" if args.include_std and s is not None else f"$\\mathbf{{{fmt(v)}}}$")
+            row_fmt.append("$\mathbf{"+ fmt(v) + "}$" + " {\\tiny (" + "$\\pm$ " + f"{fmt(s)}"  + ")}" if args.include_std and s is not None else f"$\\mathbf{{{fmt(v)}}}$")
         else:
-            row_fmt.append(f"${fmt(v)} \\pm {fmt(s)}$" if args.include_std and s is not None else f"{fmt(v)}")
-    latex.append(f"{row['Oracle']} & " + " & ".join(row_fmt) + r" \\")
+            row_fmt.append(f"${fmt(v)}$" + " {\\tiny (" + "$\\pm$ " + f"{fmt(s)}"  + ")}" if args.include_std and s is not None else f"{fmt(v)}")
+    latex.append(r"\small{" + f"{row['Oracle']}" + "} & " + " & ".join(row_fmt) + r" \\")
 
 latex.append(r"\midrule")
 
@@ -158,13 +155,13 @@ sum_fmt = []
 for i, (s, sd) in enumerate(zip(sums, sum_stds)):
     def fmt(x): return f"{x:.3f}"
     if i == max_sum_idx:
-        sum_fmt.append(f"$\\mathbf{{{fmt(s)} \\pm {fmt(sd)}}}$" if args.include_std and sd is not None else f"$\\mathbf{{{fmt(s)}}}$")
+        sum_fmt.append("$\mathbf{"+ fmt(s) + "}$" + " {\\tiny (" + "$\\pm$ " + f"{fmt(sd)}"  + ")}" if args.include_std and sd is not None else f"$\\mathbf{{{fmt(s)}}}$")
     else:
         within = args.include_std and (max_sum_std is not None) and (s >= max_sum - max_sum_std) and (s != max_sum)
         if within:
-            sum_fmt.append(f"$\\mathbf{{{fmt(s)} \\pm {fmt(sd)}}}$" if args.include_std and sd is not None else f"$\\mathbf{{{fmt(s)}}}$")
+            sum_fmt.append("$\mathbf{"+ fmt(s) + "}$" + " {\\tiny (" + "$\\pm$ " + f"{fmt(sd)}"  + ")}" if args.include_std and sd is not None else f"$\\mathbf{{{fmt(s)}}}$")
         else:
-            sum_fmt.append(f"${fmt(s)} \\pm {fmt(sd)}$" if args.include_std and sd is not None else f"{fmt(s)}")
+            sum_fmt.append(f"${{{fmt(s)}}}$" + " {\\tiny (" + "$\\pm$ " + f"{fmt(sd)}"  + ")}" if args.include_std and sd is not None else f"{fmt(s)}")
 
 latex.append(f"\\textbf{{Sum}} & " + " & ".join(sum_fmt) + r" \\")
 latex.append(r"\bottomrule")

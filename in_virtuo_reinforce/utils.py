@@ -744,12 +744,10 @@ class GeneticPrompter:
         smi2 = bridge_smiles_fragments(custom_decode_sequence(self.tokenizer, p2_ids).split())
         fr1 = decompose_smiles(smi1, self.max_frags, sort=True)
         fr2 = decompose_smiles(smi2, self.max_frags, sort=True)
-        if self.close:
-            frags = fr1
-        else:
-            frags = fr1[:-self.K] + fr2[-self.K:] if len(fr1) < 7 else fr1[:-2] + fr2[-2:]
-        random.shuffle(frags)  # if not self.close else None
-        frags += fr1[-self.K:] + fr2[:-self.K] if len(fr1) < 7 else fr1[:-2] + fr2[-2:]
+        if random.random() < 0.5:
+            random.shuffle(fr1)
+            random.shuffle(fr2)
+        frags = fr1[:-1] + fr2[-1:]
         kept = " ".join(frags)  # +" "
         return self.tokenizer.encode(kept)[:n_oracle]#
 

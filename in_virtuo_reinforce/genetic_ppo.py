@@ -47,6 +47,8 @@ class OptimizerConfig:
     device: int
     start_t: float
     num_timesteps: int
+    num_reinforce_steps: int
+
     big: bool
     alpha: float
     beta: float
@@ -72,12 +74,10 @@ class OptimizerConfig:
     use_prescreen: bool
     vocab_size: int
     first_pop_size: int
-    vocab_mask: bool
     rl_lr: float
     tot_offspring_size:int
+    no_mask: bool
     start_rank: int = 0
-    no_stop: bool = False
-    mse_loss: bool = False
     max_frags: int = 5
 
 
@@ -194,7 +194,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         self.global_step = 0
         self.stop_counter = 0
         self.ga_best_counter = 0
-
+        self.ga_start = 0
         # Model initialization
         ckpt = self.config.ckpt
         self.model = InVirtuoFM.load_from_checkpoint(ckpt, map_location="cpu").to(self.device)
@@ -230,7 +230,8 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             )
 
         self.model_opt = optim.Adam(self.model.parameters(), lr=self.config.rl_lr, betas=(0.9, 0.999))
-        self.lr_scheduler = get_cosine_schedule_with_warmup(self.model_opt, num_warmup_steps=10, num_training_steps=(self.config.num_timesteps//5)*self.config.max_oracle_calls // (self.config.tot_offspring_size+self.config.experience_replay_size))
+        num_steps = int(self.config.max_oracle_calls // (self.config.tot_offspring_size)*self.config.num_reinforce_steps)
+        self.lr_scheduler = get_cosine_schedule_with_warmup(self.model_opt, num_warmup_steps=10, num_training_steps=num_steps)
 
         # Initialize trainer
         trainer = Trainer(max_steps=1, limit_train_batches=0.0, logger=False)
@@ -240,18 +241,11 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         self.train_ids, self.train_prompts, self.train_scores, self.train_old_logprobs, self.train_x_0 = [], [], [], [], []
 
         self.config.experience_replay_size = self.config.experience_replay_size
-        self.experience = ExperienceReplay(max_size=self.config.experience_replay_size *10 , device=self.device)
+        self.experience = ExperienceReplay(max_size=self.config.experience_replay_size , device=self.device)
         self.c_neg = self.config.c_neg
         self.config.mutation_size = self.config.mutation_size if self.config.use_mutation else 0
         self.max_oracle_calls = self.config.max_oracle_calls
-        if self.config.vocab_mask:
-            with open("tokenizer/smiles_minimal.json", "r") as f:
-                tokenizer_data = json.load(f)
-            allowed_tokens = set(tokenizer_data["model"]["vocab"].keys())
-            self.vocab_mask = torch.tensor([i in allowed_tokens for i in range(len(self.model.tokenizer))], device=self.device).unsqueeze(0)
 
-        else:
-            self.vocab_mask = None
         self.prev_novelty = 1
 
     def set_c_neg(self, novelty):
@@ -268,7 +262,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         # elif novelty > 0.1 and self.c_neg > 0:
         #     self.c_neg = 0
         #     self.config.c_neg *= 0.99
-        elif novelty < 0.1:
+        elif novelty < 0.05:
             # self.c_neg = 0
             # self.config.c_neg *= 0.9
             self.stop_counter += 1
@@ -280,21 +274,15 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         Run the mol-opt molecule mutations
         """
 
-        start = len(self.ga_scores)
-        new_smiles = len(self.train_ids)
+
         tries = 0
-        i_ = 0
         for iteration in range(self.config.mutation_size):
             score = None
             i_ = 0
-
             while i_ < max_tries:
                 selected_parent = sorted(self.mol_buffer.items(), key=lambda x: x[1][0], reverse=True)[i_ : i_ + 1]
-                if sorted(self.mol_buffer.values(), key=lambda x: x[0], reverse=True)[0] == 0:
-                    selected_parent = random.choice(list(self.mol_buffer.items()))
-
-                if not selected_parent:
-                    break
+                if sorted(self.mol_buffer.values(), key=lambda x: x[0], reverse=True)[0][0] == 0:
+                    selected_parent = [random.choice(list(self.mol_buffer.items()))]
 
                 smi, tries_temp = reproduce(selected_parent, 1)
                 try:
@@ -320,26 +308,27 @@ class InVirtuoFMOptimizer(BaseOptimizer):
                             if score > 0:
                                 self.prompter.update_with_score(smi, score)
                                 self.prompter.bandit.update(len(new_seq[new_seq != self.model.pad_token_id]), score)
-                        new_smiles += 1
                         break
                 i_ += 1
-            if len(self.ga_scores[start:]) >= self.config.mutation_size  or len(self.train_ids) >= self.config.tot_offspring_size:
-                self.used_mutation = True
+            if len(self.ga_scores[self.ga_start:]) >= self.config.mutation_size  or len(self.train_ids) >= self.config.tot_offspring_size:
                 break
-        if len(self.ga_scores[start:]) > 0:
+        self.used_mutation = True
+
+        if len(self.ga_scores[self.ga_start:]) > 0:
             self.global_step += 1
             wandb.log(
                 {
-                    "ga/num_generated": len(self.ga_scores) - start,
-                    "ga/best_ga_scores": np.max(self.ga_scores[start:]),
+                    "ga/num_generated": len(self.ga_scores) - self.ga_start,
+                    "ga/best_ga_scores": np.max(self.ga_scores[self.ga_start:]),
                     "num_oracle_calls": len(self.mol_buffer.values()),
                     "ga/tries": tries / max_tries,
-                    "ga/qed": np.mean(self.qed_ga[start:]),
-                    "ga/sa": np.mean(self.sa_ga[start:]),
+                    "ga/qed": np.mean(self.qed_ga[self.ga_start:]),
+                    "ga/sa": np.mean(self.sa_ga[self.ga_start:]),
                     "ga/best_ga_counter": self.ga_best_counter,
                 },
                 step=self.global_step,
             )
+            self.ga_start = len(self.ga_scores)
 
 
     def evaluate_offspring(self, valid_new_seqs, valid_new_x_0, valid_new_smiles, n_valid=None):
@@ -347,6 +336,8 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         Evaluate the offspring sequences.
         """
         for i, (seq, x_0, smi) in enumerate(zip(valid_new_seqs, valid_new_x_0, valid_new_smiles)):
+            if len(self.train_ids) >= self.config.tot_offspring_size - self.config.mutation_size * (not self.used_mutation and self.config.train_mutation):
+                break
             seq = torch.tensor(seq)
             qed = QED.qed(Chem.MolFromSmiles(smi))
             sa = sascorer.calculateScore(Chem.MolFromSmiles(smi))
@@ -354,8 +345,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             self.sa.append(sa)
             score = self.oracle(smi)
             self.scores.append(score)
-            if score == 1 and self.config.no_stop:
-                self.config.num_timesteps = 0
+
             if self.config.use_prompter:
                 if score > 0:
                     self.prompter.update_with_score(smi, score)  # type: ignore[attr-defined]
@@ -365,8 +355,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             self.train_ids.append(seq)
             self.train_scores.append(score)  # *qed if (qed>0.8 and sa<3) else score*(qed*0.5)*(min(0,4-sa))
             self.train_x_0.append(x_0)
-            if len(self.train_ids) >= self.config.tot_offspring_size - self.config.mutation_size * (not self.used_mutation and self.config.train_mutation):
-                break
+
         return
 
     def add_experience(self):
@@ -382,6 +371,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             new_experience.append((seq_trimmed, self.train_scores[i], uni_trimmed))
         self.experience.add_experience(new_experience)
 
+
     def pad_seqs(self, ids):
         """
         Pad the sequences to the same length.
@@ -396,6 +386,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         t_roll = torch.rand(len(ids_tensor), device=self.device)
         for i in range(timesteps):
             current_t = (t_roll / 10 + i * (1.0 - self.config.start_t) / timesteps) % 1
+            current_t = current_t.clamp(0, 0.99)
             old_lp, _, x_t, source_mask = self.compute_logprobs(ids_tensor, uni_tensor, current_t, prior=True)
             old_logprobs.append(old_lp.detach().unsqueeze(1))
             x_ts_list.append(x_t.unsqueeze(1).clone())
@@ -413,14 +404,17 @@ class InVirtuoFMOptimizer(BaseOptimizer):
 
     def construct_loader(self, ids, scores, uni):
 
-        if len(self.experience) >= self.config.experience_replay_size and self.config.experience_replay_size > 0:
-            exp_seqs, exp_scores, exp_uni = self.experience.sample(min(len(self.experience), 10*self.config.experience_replay_size))
+        if self.config.experience_replay_size > 0 and len(self.experience) > 0:
+            exp_seqs, exp_scores, exp_uni = self.experience.sample(len(self.experience))
             ids = ids + exp_seqs
             scores = scores + exp_scores.tolist()
             uni = uni + exp_uni
+            combined = list(zip(ids, scores, uni))
+            random.shuffle(combined)
+            ids, scores, uni = map(list, zip(*combined))
         combined_dataset = self.construct_dataset(ids, scores, uni, self.config.num_timesteps)
         loader = DataLoader(
-            combined_dataset, batch_size=(self.config.tot_offspring_size + self.config.experience_replay_size), shuffle=True, collate_fn=custom_collate, drop_last=False
+            combined_dataset, batch_size=(self.config.tot_offspring_size), shuffle=True, collate_fn=custom_collate, drop_last=False
         )
         return loader
 
@@ -434,10 +428,10 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             x_t, source_mask = sample_path(t, uni, ids)
         else:
             x_t = x_t.clone()
-        source_mask = source_mask & mask
+        source_mask = source_mask & mask if not self.config.no_mask else mask
         x_t[~mask] = self.model.pad_token_id
 
-        # Get logits
+        # Get logitssample
         with torch.no_grad() if prior else nullcontext():
             # self.prior.train()
             logits = self.prior.model(x=x_t, t=t, attn_mask=attn, return_hidden=False) if prior else self.model.model(x=x_t, t=t, attn_mask=attn, return_hidden=False)
@@ -460,6 +454,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
 
         num_batches = len(loader)
         self.model_opt.zero_grad()
+        avg_grad_norm = 0
         for i, (batch_ids, batch_scores, batch_uni, batch_t, batch_old_lp, batch_x_ts, batch_masks) in enumerate(loader):
 
             agent_lp, entropy, _, _ = self.compute_logprobs(batch_ids, batch_uni, batch_t, prior=False, x_t=batch_x_ts, source_mask=batch_masks)
@@ -468,9 +463,8 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             if batch_scores.numel() > 1 and not score_std < 1e-8:
                 adv = (batch_scores - batch_scores.mean()) / (score_std + 1e-8)
             else:
-                adv = torch.zeros_like(batch_scores)
                 continue
-            adv = torch.where(adv > 0, adv, self.c_neg * adv)
+            adv = torch.where(adv > 0, adv, self.c_neg * adv)*1/(1-batch_t**2)
 
             surr1 = ratio * adv
             surr2 = torch.clamp(ratio, 1 - self.config.clip_eps, 1 + self.config.clip_eps) * adv
@@ -481,9 +475,11 @@ class InVirtuoFMOptimizer(BaseOptimizer):
                 continue
 
             loss.backward()
+            grad_norm = torch.cat([p.grad.flatten() for p in self.model.parameters() if p.grad is not None]).norm().item()
+            avg_grad_norm += grad_norm
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=2)
 
-            if i % 5 == 4:
+            if i % (len(loader)//self.config.num_reinforce_steps) == (len(loader)//self.config.num_reinforce_steps) - 1:
                 self.global_step += 1
 
                 wandb.log(
@@ -523,7 +519,6 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             oracle=n_oracle,
             eta=1,
             return_uni=True,
-            vocab_mask=self.vocab_mask,
         )
         valid, smiles, _ = evaluate_smiles(
             generated_ids=samples,
@@ -543,7 +538,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
 
         if self.config.use_prescreen:
             # 1. Load ZINC SMILES
-            df = pd.read_csv("in_virtuo_reinforce/vocab/zinc250k.csv").sort_values(by=self.config.oracle, ascending=False)[: self.config.first_pop_size]
+            df = pd.read_csv("in_virtuo_reinforce/vocab/zinc250k.csv").sort_values(by=self.config.oracle, ascending=False)[:self.config.offspring_size - self.config.first_pop_size]
 
             print(f"Loaded {len(smiles)} ZINC SMILES")
             samples = [torch.tensor(self.tokenizer.encode(" ".join(decompose_smiles(sm, max_frags=self.config.max_frags)))) for sm in df["smiles"].values.tolist()] + samples
@@ -597,7 +592,6 @@ class InVirtuoFMOptimizer(BaseOptimizer):
                 temperature_scaling=False,
                 eta=1,
                 return_uni=True,
-                vocab_mask=self.vocab_mask,
             )
         valid, all_smiles, metrics = evaluate_smiles(all_seqs, self.tokenizer, exclude_salts=True, return_values=True, print_flag=False, print_metrics=False, return_unique_indices=True)
         valid_new_smiles, valid_new_seqs, valid_new_x_0, n_valid = filter_valid_new(valid, all_smiles, all_seqs, all_x_0, self.mol_buffer, n_oracle)
@@ -627,29 +621,22 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             step=self.global_step,
         )
         self.evaluate_offspring(valid_new_seqs, valid_new_x_0, valid_new_smiles, n_valid)
-        if self.config.use_mutation and not self.used_mutation:
+        if not self.used_mutation:
             self.run_ga()
         self.set_c_neg(novelty)
 
     def evolve_population(self):
         self.generate_offspring_batch()
         if len(self.train_ids) >= self.config.tot_offspring_size and self.config.num_timesteps > 0:
-            assert len(self.train_ids) == self.config.tot_offspring_size, f"len(self.train_ids) = {len(self.train_ids)}"
             self.used_mutation = not self.config.use_mutation
             self.reinforce([item for item in self.train_ids], [item for item in self.train_scores], [item for item in self.train_x_0])  # type: ignore[attr-defined]
-            self.prior.model = copy.deepcopy(self.model.model)
 
-            new_experience = []
-            for i in range(len(self.train_ids)):
-                seq = self.train_ids[i]
-                uni_ = self.train_x_0[i]
-                valid_len = (seq != self.model.pad_token_id).sum()
-                seq_trimmed, uni_trimmed = seq[:valid_len], uni_[:valid_len]
-                new_experience.append((seq_trimmed, self.train_scores[i], uni_trimmed))
+
+            self.prior.model = copy.deepcopy(self.model.model)
+            self.add_experience()
             self.train_ids, self.train_scores, self.train_x_0 = [], [], []
 
-            self.experience.add_experience(new_experience)
-        elif self.config.num_timesteps == 0:
+        elif len(self.train_ids) >= self.config.tot_offspring_size:
             print("resetting train_ids, train_scores, train_x_0")
             self.train_ids, self.train_scores, self.train_x_0 = [], [], []
 
@@ -671,13 +658,10 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         while not self.finish:
             self.evolve_population()
             if (sum([x[0] for x in sorted(list(self.mol_buffer.values()), reverse=True)[:10]]) >= 9.99) or self.stop_counter == 10:
-                if self.config.no_stop:
-                    self.config.num_timesteps = 0
-                    self.config.offspring_size = 500
-                else:
-                    print("STOPPING")
-                    for i in range(self.max_oracle_calls - len(self.mol_buffer)):
-                        self.mol_buffer["finished" + str(i)] = [0, len(self.mol_buffer) + i]
+
+                print("STOPPING")
+                for i in range(self.max_oracle_calls - len(self.mol_buffer)):
+                    self.mol_buffer["finished" + str(i)] = [0, len(self.mol_buffer) + i]
 
             if len(self.mol_buffer) > 0:
                 smis_, true_scores_ = [], []
@@ -767,7 +751,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--offspring_size", type=int, default=64)
     parser.add_argument("--num_timesteps", type=int, default=10)
-    parser.add_argument("--vocab_mask", action="store_true")
+    parser.add_argument("--num_reinforce_steps", type=int, default=10)
     parser.add_argument("--lr", default=0.1, type=float)
     parser.add_argument("--big", action="store_true")
     parser.add_argument("--dt", type=float, default=0.01)
@@ -790,7 +774,6 @@ if __name__ == "__main__":
     parser.add_argument("--identifier", type=str, default="")
     parser.add_argument("--end_task", type=int, default=len(oracles))
     parser.add_argument("--first_pop_size", type=int, default=50)
-    parser.add_argument("--no_stop", action="store_true")
     parser.add_argument("--num_seeds", type=int, default=3)
     parser.add_argument("--start_seed", type=int, default=0)
     parser.add_argument("--max_frags", type=int, default=5)
@@ -799,6 +782,7 @@ if __name__ == "__main__":
     parser.add_argument("--aggressive_bandit", action="store_true")
     parser.add_argument("--tot_offspring_size", type=int, default=None)
     parser.add_argument("--start_rank", type=int, default=0)
+    parser.add_argument("--no_mask", action="store_true")
     # Then in your config setup, add:
     args = parser.parse_args()
     device = f"cuda:{args.device}" if len(args.device) == 1 else args.device
