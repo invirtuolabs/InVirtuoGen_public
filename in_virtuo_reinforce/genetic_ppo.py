@@ -77,6 +77,8 @@ class OptimizerConfig:
     rl_lr: float
     tot_offspring_size:int
     no_mask: bool
+    no_bandit: bool
+    classic_ga: bool
     start_rank: int = 0
     max_frags: int = 5
 
@@ -338,6 +340,18 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         for i, (seq, x_0, smi) in enumerate(zip(valid_new_seqs, valid_new_x_0, valid_new_smiles)):
             if len(self.train_ids) >= self.config.tot_offspring_size - self.config.mutation_size * (not self.used_mutation and self.config.train_mutation):
                 break
+            if self.config.classic_ga:
+                counter = 0
+                while counter<10:
+                    smi = reproduce([(smi,[1])], 1)[0]
+
+                    if smi and smi not in self.mol_buffer:
+                        seq = self.tokenizer.encode(" ".join(decompose_smiles(smi)))
+                        break
+                    counter += 1
+                if counter == 10:
+                    continue
+
             seq = torch.tensor(seq)
             qed = QED.qed(Chem.MolFromSmiles(smi))
             sa = sascorer.calculateScore(Chem.MolFromSmiles(smi))
@@ -346,12 +360,15 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             score = self.oracle(smi)
             self.scores.append(score)
 
-            if self.config.use_prompter:
-                if score > 0:
+
+            if score > 0:
+                if self.config.use_prompter:
                     self.prompter.update_with_score(smi, score)  # type: ignore[attr-defined]
-                    self.prompter.bandit.update(len(seq[seq != self.model.pad_token_id]), score)
-            else:
-                self.bandit.update(len(seq[seq != self.model.pad_token_id]), score)
+                    if not self.config.no_bandit:
+                        self.prompter.bandit.update(len(seq[seq != self.model.pad_token_id]), score)
+                else:
+                    self.bandit.update(len(seq[seq != self.model.pad_token_id]), score)
+
             self.train_ids.append(seq)
             self.train_scores.append(score)  # *qed if (qed>0.8 and sa<3) else score*(qed*0.5)*(min(0,4-sa))
             self.train_x_0.append(x_0)
@@ -553,12 +570,13 @@ class InVirtuoFMOptimizer(BaseOptimizer):
         for i in range(len(samples)):
             if scores[i] > 0:
                 if self.config.use_prompter:
-
                     self.prompter.update_with_score(smiles[i], scores[i])
-                    self.prompter.bandit.update(len(samples[i][samples[i] != self.model.pad_token_id]), scores[i])
+                    if not self.config.no_bandit:
+                        self.prompter.bandit.update(len(samples[i][samples[i] != self.model.pad_token_id]), scores[i])
                 else:
-                    self.bandit.update(len(samples[i][samples[i] != self.model.pad_token_id]), scores[i])
-        self.train_ids = [s[s != self.model.pad_token_id] for s in samples]
+                    if not self.config.no_bandit:
+                        self.bandit.update(len(samples[i][samples[i] != self.model.pad_token_id]), scores[i])
+        self.train_ids  = [s[s != self.model.pad_token_id] for s in samples]
         self.train_x_0 = [i[: len(s)] for i, s in zip(init_ids, self.train_ids)]
         self.train_scores = scores
         if max(self.train_scores) > 0  and self.config.num_timesteps > 0:
@@ -574,7 +592,6 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             self.prompter.offspring_size = num_samples
             prompts, n_oracle = self.prompter.build_prompts_and_masks(dev=self.device)
             assert len(prompts) == num_samples
-
         else:
             prompts = None
             for i in range(num_samples):
@@ -621,7 +638,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             step=self.global_step,
         )
         self.evaluate_offspring(valid_new_seqs, valid_new_x_0, valid_new_smiles, n_valid)
-        if not self.used_mutation:
+        if not self.used_mutation and not self.config.classic_ga:
             self.run_ga()
         self.set_c_neg(novelty)
 
@@ -780,9 +797,11 @@ if __name__ == "__main__":
     parser.add_argument("--difficult_ones", action="store_true")
     parser.add_argument("--easy_ones", action="store_true")
     parser.add_argument("--aggressive_bandit", action="store_true")
+    parser.add_argument("--no_bandit", action="store_true")
     parser.add_argument("--tot_offspring_size", type=int, default=None)
     parser.add_argument("--start_rank", type=int, default=0)
     parser.add_argument("--no_mask", action="store_true")
+    parser.add_argument("--classic_ga", action="store_true")
     # Then in your config setup, add:
     args = parser.parse_args()
     device = f"cuda:{args.device}" if len(args.device) == 1 else args.device
