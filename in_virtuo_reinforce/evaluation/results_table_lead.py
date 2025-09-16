@@ -388,7 +388,6 @@ def create_latex_table(
                 ci += 1
                 si += mv
                 seed_score = seed_score_map.get(idx, None)
-                print("mv", mv, "seed_score", seed_score)
                 if seed_score is None or mv <= seed_score:
                     ce += 1
                     se += mv

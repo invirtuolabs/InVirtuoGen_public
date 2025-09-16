@@ -204,7 +204,7 @@ else:
             caption += r" with standard deviations"
         caption += r". Best results and those within one standard deviation of the best are indicated in bold. The scores for $f$-RAG \citep{lee2024moleculegenerationfragmentretrieval} and GenMol \cite{genmol} are taken from the respective publications.}"
     latex.append(caption)
-    latex.append(r"\label{tab:our_vs_baselines} " if not args.exclude_prescreen else r"\label{tab:prescreened}")
+    latex.append(r"\label{tab:no_prescreen} " if not args.exclude_prescreen else r"\label{tab:prescreen}")
     latex.append(r"\begin{tabularx}{\linewidth}{l|>{\columncolor{gray!20}}p{2.2cm} "+("Y " * (len(methods)-1))+"}") if not args.ablation_mode else     latex.append(r"\begin{tabularx}{\linewidth}{l|p{2.2cm} "+("Y " * (len(methods)-1))+"}")
     latex.append(r"\toprule")
     latex.append("Oracle & " + " & ".join(latex_headers) + r" \\")

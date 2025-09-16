@@ -240,7 +240,7 @@ No Prompter, No Mutation:
 | **Sum**                  | **18.893**             | 18.782    | 17.831      | 17.758 | 16.131                            | 14.349                                |
 
 ### 4. Lead Optimization:
-(We were unable to install the required dependencies for these experiments in the Dockerfile on an aarch64 environment. On ARM systems, the setup works by simply running pip install -r requirements.txt).
+(We were unable to install the required dependencies for these experiments in the Dockerfile on an aarch64 environment. On ARM systems, the setup works by simply running pip install -r requirements.txt). Also we can not guarantee exact reproducability here, due to the stochasticity of the docking with openVINA.
 | Protein (DS/QED/SA)    | GenMol | RetMol | GraphGA | InVirtuoGen | GenMol | RetMol | GraphGA | InVirtuoGen |
 |------------------------|--------|--------|---------|-------------|--------|--------|---------|-------------|
 | **δ = 0.4**            |        |        |         |             | **δ = 0.6** |        |        |             |
@@ -271,11 +271,6 @@ No Prompter, No Mutation:
    --clip_eps 0.5 --start_task 0 --experience_replay_size 100\
     --dt 0.01 --c_neg 1 --dt 0.01 --tot_offspring 100
 ```
-
-
-
-
-
 
 ## 📄 Citation
 

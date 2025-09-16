@@ -80,7 +80,7 @@ def write_latex_tables(results: dict, outpath: str = "comparison_tables.tex", in
         metrics = sorted(m for m in all_metrics if m not in ["fcd", "qed", "sa", 'distance'])
 
         # Table setup
-        f.write("  \\caption{Average performance across five fragment‐constrained generation tasks: motif extension, linker design, superstructure generation, scaffold morphing, and scaffold decoration. In our setup, scaffold decoration is identical to linker design, so results are shared.}\n")
+        f.write("  \\caption{Performance across five fragment‐constrained generation tasks, averaged over three random seeds: motif extension, linker design, superstructure generation, scaffold morphing, and scaffold decoration. In our setup, scaffold decoration is identical to linker design, so results are shared. }\n")
         f.write("  \\small\n")
         f.write("  \\setlength{\\tabcolsep}{4pt} % reduce column padding\n")
         f.write("  \\renewcommand{\\arraystretch}{1.2} % row height\n")
