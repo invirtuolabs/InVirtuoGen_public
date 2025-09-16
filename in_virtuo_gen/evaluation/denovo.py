@@ -254,6 +254,7 @@ def main():
 
 
     for dt in args.dt:
+        print(f"Scanning dt {dt}")
         seed_results = []
         for seed in range(args.num_seeds):
             pl.seed_everything(seed)
@@ -264,7 +265,7 @@ def main():
             )
             model = model.to(device)
 
-            seed_dir = os.path.join("results", "denovo_results", "quality_vs_diversity", Path(ckpt).parent.name, f"dt_{dt}")
+            seed_dir = os.path.join("results", "denovo_results", "quality_vs_diversity", f"dt_{dt}")
             os.makedirs(seed_dir, exist_ok=True)
 
             res = scan_quality_vs_diversity_one_seed(

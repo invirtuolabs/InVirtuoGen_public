@@ -52,14 +52,14 @@ def sample_path(t, x_0, x_1, n=1):
     source_indices = torch.rand(size=x_1.shape, device=x_1.device) < sigma_t.unsqueeze(-1).to(x_1.device)
     return torch.where(condition=source_indices, input=x_0, other=x_1), source_indices
 
+def filter_valid_new(valid, smiles, off_seqs, all_x_0, mol_buffer):
 
-def filter_valid_new(valid, smiles, off_seqs, all_x_0, mol_buffer, offspring_size):
-    valid_new = [i for i in valid if smiles[i] not in mol_buffer][:offspring_size]
+    valid_new = [i for i in valid if smiles[i] not in mol_buffer]
     valid_new_seqs = [off_seqs[i] for i in valid_new]
     valid_new_smiles = [smiles[i] for i in valid_new]
     valid_new_x_0 = [all_x_0[i] for i in valid_new]
-    return valid_new_smiles, valid_new_seqs, valid_new_x_0
 
+    return valid_new_smiles, valid_new_seqs, valid_new_x_0
 
 def compute_seq_logp(logits, ids, source_mask):
     log_probs = F.log_softmax(logits, dim=-1)

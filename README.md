@@ -5,13 +5,14 @@
 ## 🚀 Quick Start
 
 ### Setup Environment
+For ARM-based
 ```bash
 mamba create -n invgen python=3.10.16 -y
 mamba activate invgen
 pip install -r requirements.txt
 pip install -e .
 ```
-
+For aarch64, use the provided Dockerfile
 ### Download Checkpoints
 ```bash
 mkdir checkpoints && cd checkpoints
@@ -105,44 +106,23 @@ python -m in_virtuo_reinforce.genetic_ppo \
     --dt 0.01 --experience 28 --use_prescreen
 ```
 
-## 📊 Benchmark Results
-
-### Fragment-Constrained Generation Performance
-
-| Task | Method | Diversity | Quality | Uniqueness | Validity |
-|------|--------|:---------:|:-------:|:----------:|:--------:|
-| **Motif Extension** | SAFE-GPT | 0.56 | 18.60 | 66.80 | **96.10** |
-| | GenMol | 0.62 | 27.50 | 77.80 | 77.20 |
-| | **InVirtuoGen** | **0.64** | **34.43** | **97.24** | 76.87 |
-| **Linker Design/** | SAFE-GPT | **0.55** | 21.70 | 82.50 | 76.60 |
-| **Scaffold Morphing** | GenMol | **0.55** | **21.90** | 83.70 | **100.00** |
-| | **InVirtuoGen** | 0.53 | **22.17** | **90.40** | 70.80 |
-| **Superstructure Design** | SAFE-GPT | 0.57 | 14.30 | 83.00 | 95.70 |
-| | GenMol | 0.57 | **33.30** | 78.30 | **98.20** |
-| | **InVirtuoGen** | **0.77** | 25.87 | **99.82** | 87.83 |
-| **Scaffold Decoration** | SAFE-GPT | 0.57 | 10.00 | 74.70 | **97.70** |
-| | GenMol | **0.58** | 29.60 | 78.00 | 96.80 |
-| | **InVirtuoGen** | 0.55 | **35.00** | **90.06** | 95.33 |
-| **Average** | SAFE-GPT | 0.56 | 16.15 | 76.75 | 91.52 |
-| | GenMol | 0.58 | 28.07 | 79.45 | **93.05** |
-| | **InVirtuoGen** | **0.62** | **29.37** | **94.38** | 82.71 |
+### 4. Lead Optimization:
+(We were unable to install the required dependencies for these experiments in the Dockerfile on an aarch64 environment. On ARM systems, the setup works by simply running pip install -r requirements.txt).
+```bash
+ python -m in_virtuo_reinforce.ppo_docking --device 0 --start_t 0.\
+  --offspring_size 20 --seed 0 --max_oracle_calls 1000 --num_reinforce_steps 50\
+   --clip_eps 0.5 --start_task 0 --experience_replay_size 100\
+    --dt 0.01 --c_neg 1 --dt 0.01 --tot_offspring 100
+```
 
 
 
-### PMO Benchmark (TOP-10 AUC with Prescreening)
-
-| Oracle Task | InVirtuoGen | GenMol | f-RAG |
-|-------------|:-----------:|:------:|:-----:|
-| **Total Score** | **18.745** | 18.362 | 16.928 |
-
-
-## 🔬 Technical Innovation
 
 **Key Advantages:**
 - **Uniform Source Distribution** - Enables global iterative refinement vs. autoregressive/masked completion
 - **Decoupled Sampling** - Number sampling steps independent of sequence length
 - **Fragment-Level Control** - Direct manipulation of chemically meaningful substructures
-- **Integrated Optimization** - Seamless GA + PPO for property-targeted generation
+- **Integrated Optimization** - Seamless GA + PPO for property-targeted generation and lead optimization
 
 **Architecture:**
 - Discrete flows model with diffusion transformer backbone
@@ -150,16 +130,6 @@ python -m in_virtuo_reinforce.genetic_ppo \
 - Character-level tokenization (204-token vocabulary)
 - Bidirectional attention for context modeling
 
-## 📋 System Requirements
-
-**Minimum:**
-- Python 3.10+
-- CUDA-capable GPU (8GB+ VRAM recommended)
-- 16GB+ RAM
-
-**Optimal:**
-- RTX 4090 or A100 GPU
-- 32GB+ RAM for large-scale optimization
 
 ## 📄 Citation
 
@@ -167,4 +137,12 @@ To BE DONE
 
 ## 📧 Contact
 
-AFTER UNBLINDING
+
+Reproducing results:
+ PPO With Prescreening:
+ python -m in_virtuo_reinforce.evaluation.results_table --results_root results/target_property_optimization/775216 --incl
+
+ python -m in_virtuo_reinforce.evaluation.results_table --results_root results/target_property_optimization/778165  --incl --excl
+python  -m in_virtuo_reinforce.evaluation.results_table --ablation_mode \
+  --results_paths results/target_property_optimization/780605_no_mutation results/target_property_optimization/779949_no_mut_no_exp_replay results/target_property_optimization/773771_no_ppo results/target_property_optimization/772670_no_prompter_no_prescreen_no_mut  \
+  --model_names "No Mutation" "No Mutation, No Replay" "No PPO" "No Prompter, No Mutation, No Prescreen"

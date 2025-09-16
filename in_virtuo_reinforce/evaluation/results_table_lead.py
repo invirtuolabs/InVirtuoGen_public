@@ -3,7 +3,79 @@ import glob
 import os
 import pandas as pd
 import numpy as np
+import argparse
+def extract_seed_metrics(results_dir):
+    """
+    Build {(target, idx): (seed_qed, seed_sa)} from any available thr file.
+    Seed rows are detected as sim >= 0.999. If multiple, take the first.
+    """
+    rx = re.compile(r"docking_(?P<target>[\w\-]+)_idx(?P<idx>\d+)_thr(?P<thr>[46])\.csv")
+    files = glob.glob(os.path.join(results_dir, "**/docking_*_idx*_thr*.csv"), recursive=True)
 
+    metrics = {}
+    seen = set()
+
+    for fn in files:
+        m = rx.search(os.path.basename(fn))
+        if not m:
+            continue
+        target, idx = m.group("target"), int(m.group("idx"))
+        key = (target, idx)
+        if key in seen:
+            continue
+
+        try:
+            df = pd.read_csv(fn)
+            if all(col in df.columns for col in ["sim", "qed", "sa"]):
+                seed_rows = df[df["sim"] >= 0.999]
+                if not seed_rows.empty:
+                    row0 = seed_rows.iloc[0]
+                    seed_qed = float(row0["qed"])
+                    seed_sa = float(row0["sa"])
+                    metrics[key] = (seed_qed, seed_sa)
+                    seen.add(key)
+        except Exception as e:
+            print(f"Warning: could not read seed metrics from {fn}: {e}")
+
+    return metrics
+def load_seed_metrics_from_actives(csv_path, baseline_raw_df, atol=0.05):
+    """
+    Map (target, idx) -> (QED, SA) using actives.csv.
+    Rows are matched by DS ~= abs(seed_score) with tolerance.
+    """
+    if not os.path.exists(csv_path):
+        return {}
+
+    try:
+        df = pd.read_csv(csv_path)
+        df["SA"] = 10.0 -9* df["SA"]
+    except Exception as e:
+        print(f"Warning: could not read {csv_path}: {e}")
+        return {}
+
+    if not all(c in df.columns for c in ["target", "DS", "QED", "SA"]):
+        print(f"Warning: missing required columns in {csv_path}")
+        return {}
+
+    per_target = {}
+    for tgt, sub in df.groupby("target"):
+        per_target[tgt] = [(float(r.DS), float(r.QED), float(r.SA)) for _, r in sub.iterrows()]
+
+    metrics = {}
+    for target in baseline_raw_df["target"].unique():
+        target_df = baseline_raw_df[baseline_raw_df["target"] == target].reset_index(drop=True)
+        candidates = per_target.get(target, [])
+        for idx in range(len(target_df)):
+            seed_score = float(target_df.iloc[idx]["seed_score"])
+            want = abs(seed_score)
+            hit = None
+            for ds, q, s in candidates:
+                if abs(ds - want) <= atol:
+                    hit = (q, s)
+                    break
+            if hit:
+                metrics[(target, idx)] = hit
+    return metrics
 def parse_baseline_table(raw_text):
     """
     Parse the baseline table from raw text into a structured DataFrame
@@ -108,7 +180,7 @@ def baseline_df_to_multiindex(df):
 
     return result_df
 
-def load_your_results(results_dir, method_name="InVirtuo"):
+def load_your_results(results_dir, method_name="InVirtuoGen"):
     """
     Load your experimental results from CSV files
     """
@@ -142,7 +214,6 @@ def load_your_results(results_dir, method_name="InVirtuo"):
             results[target][idx] = {}
             for thr in thrs:
                 fn = os.path.join(results_dir, f"docking_{target}_idx{idx}_thr{thr}.csv")
-
                 if not os.path.exists(fn):
                     results[target][idx][thr] = []
                     continue
@@ -164,7 +235,6 @@ def load_your_results(results_dir, method_name="InVirtuo"):
                         (df_temp['qed'] > 0.6) &
                         (df_temp['sa'] < 4)
                     ]
-
                     if df_filtered.empty:
                         results[target][idx][thr] = []
                         continue
@@ -179,7 +249,6 @@ def load_your_results(results_dir, method_name="InVirtuo"):
                 except Exception as e:
                     print(f"Error processing {fn}: {e}")
                     results[target][idx][thr] = []
-
     # Create MultiIndex DataFrame
     row_tuples = [(target, idx) for target in targets for idx in idxs]
     row_index = pd.MultiIndex.from_tuples(row_tuples, names=['protein', 'idx'])
@@ -188,11 +257,13 @@ def load_your_results(results_dir, method_name="InVirtuo"):
     columns = pd.MultiIndex.from_tuples(column_tuples, names=['threshold', 'method'])
 
     df_final = pd.DataFrame(index=row_index, columns=columns)
-
     # Populate the table
+    target_sums = {thr:0 for thr in thrs}
     for target in targets:
+
         for idx in idxs:
             for thr in thrs:
+
                 scores = results[target][idx][thr]
 
                 if not scores:
@@ -203,9 +274,10 @@ def load_your_results(results_dir, method_name="InVirtuo"):
                     mean_val = np.mean(scores)
                     std_val = np.std(scores, ddof=1)
                     value = f"{mean_val:.1f}±{std_val:.1f}"
-
+                    target_sums[thr] += float(mean_val)
                 df_final.loc[(target, idx), (f"δ = 0.{thr}", method_name)] = value
-
+    print("df_final", df_final)
+    print("target_sums", target_sums)
     return df_final
 
 def combine_results(baseline_df, your_df):
@@ -258,215 +330,262 @@ def combine_results(baseline_df, your_df):
     combined_df = combined_df.fillna("-")
 
     return combined_df
+def create_latex_table(
+    df,
+    caption=None,
+    label="tab:docking_comparison",
+    baseline_raw_df=None,
+    seed_metrics=None,
+    your_method=("InVirtuoGen", "InVirtuoGen"),
+):
+    if df is None:
+        raise ValueError("create_latex_table: df is None")
 
-def create_latex_table(df, caption="Comparison of docking scores (lower is better)", label="tab:docking_comparison", baseline_raw_df=None):
-    """
-    Create a LaTeX table from the combined DataFrame with sum row and best values marked
-    """
-    # Create a mapping from (target, idx) to seed_score if baseline_raw_df is provided
+    if caption is None:
+        caption = (
+           r"Docking scores (lower is better) averaged over 3 seeds. Bold indicates the best result per seed. Values in parentheses denote solutions that do not improve the docking score over the seed but still satisfy QED$>0.6$ and SA$<4$. For each seed, its docking score, the quantitative estimate of drug-likeness and synthetic accessibility is given."
+        )
+
+    # seed maps
     seed_score_map = {}
     if baseline_raw_df is not None:
-        for target in baseline_raw_df['target'].unique():
-            target_df = baseline_raw_df[baseline_raw_df['target'] == target].reset_index(drop=True)
-            for idx in range(len(target_df)):
-                seed_score = target_df.iloc[idx]['seed_score']
-                seed_score_map[(target, idx)] = seed_score
+        for tgt in baseline_raw_df["target"].unique():
+            tdf = baseline_raw_df[baseline_raw_df["target"] == tgt].reset_index(drop=True)
+            for idx in range(len(tdf)):
+                seed_score_map[(tgt, idx)] = float(tdf.iloc[idx]["seed_score"])
 
-    # Get unique thresholds and methods
+    seed_qed_map, seed_sa_map = {}, {}
+    if seed_metrics is not None:
+        for k, (q, s) in seed_metrics.items():
+            seed_qed_map[k] = float(q)
+            seed_sa_map[k] = float(s)
+
     thresholds = df.columns.get_level_values(0).unique()
-    methods_per_threshold = {}
-    for thr in thresholds:
-        methods_per_threshold[thr] = [m for t, m in df.columns if t == thr]
+    methods_per_threshold = {thr: [m for t, m in df.columns if t == thr] for thr in thresholds}
 
-    # Helper function to extract mean and std from value
-    def parse_value(value):
-        if value == "-" or pd.isna(value):
+    def parse_value(val):
+        if val == "-" or pd.isna(val):
             return None, None
-        value_str = str(value)
-        if "±" in value_str:
-            parts = value_str.split("±")
-            return float(parts[0]), float(parts[1])
-        else:
-            return float(value_str), 0.0
+        s = str(val).strip()
+        if "±" in s:
+            a, b = s.split("±", 1)
+            return float(a), float(b)
+        return float(s), 0.0
 
-    # Calculate sums for each method and threshold (excluding bracketed values)
-    sums = {}
-    for thr in thresholds:
-        for method in methods_per_threshold[thr]:
-            col_sum = 0
-            count = 0
-            for idx in df.index:
-                value = df.loc[idx, (thr, method)]
-                mean_val, _ = parse_value(value)
-                if mean_val is not None:
-                    # Get seed score for this row
-                    seed_score = seed_score_map.get(idx, None)
-                    # Only include in sum if better than seed (more negative)
-                    if seed_score is None or mean_val < seed_score:
-                        col_sum += mean_val
-                        count += 1
-            sums[(thr, method)] = col_sum if count > 0 else None
-
-    # Find best (minimum) sum for each threshold
+    # precompute sums (exclusive and inclusive) and best-by-sum per threshold
+    sums_excl, sums_incl = {}, {}
     best_per_threshold = {}
     for thr in thresholds:
-        min_sum = float('inf')
-        best_method = None
+        min_excl = (None, float("inf"))
         for method in methods_per_threshold[thr]:
-            if sums[(thr, method)] is not None and sums[(thr, method)] < min_sum:
-                min_sum = sums[(thr, method)]
-                best_method = method
-        best_per_threshold[thr] = best_method
+            se = si = 0.0
+            ce = ci = 0
+            for idx in df.index:
+                v = df.loc[idx, (thr, method)]
+                mv, _ = parse_value(v)
+                if mv is None:
+                    continue
+                ci += 1
+                si += mv
+                seed_score = seed_score_map.get(idx, None)
+                if seed_score is None or mv <= seed_score:
+                    ce += 1
+                    se += mv
+            sums_excl[(thr, method)] = se if ce > 0 else None
+            sums_incl[(thr, method)] = si if ci > 0 else None
 
-    # Start building LaTeX
-    latex_lines = []
+            if se is not None and se < min_excl[1]:
+                min_excl = (method, se)
+        best_per_threshold[thr] = min_excl[0]
 
-    # Table header
-    latex_lines.extend([
+    # open table
+    latex_lines = [
         r"\begin{table}[ht]",
         r"\centering",
-        r"\small",  # Make table smaller if needed
+        r"\small",
         f"\\caption{{{caption}}}",
-        f"\\label{{{label}}}"
-    ])
+        f"\\label{{{label}}}",
+        r"\begingroup",
+        r"\setlength\tabcolsep{4pt}",
+    ]
 
-    # Calculate total columns
-    total_cols = 2  # Protein and Seed columns
+    # one left column, then centered X columns
+    from collections import OrderedDict
+
+    method_col_count = sum(len(m) for m in methods_per_threshold.values())
+
+    col_spec = "@{}l "
     for methods in methods_per_threshold.values():
-        total_cols += len(methods)
+        for m in methods:
+            if m == "InVirtuoGen":
+                col_spec += ">{\\columncolor{gray!20}}c "
+            else:
+                col_spec += "c "
+    col_spec += "@{}"
 
-    # Column specification
-    col_spec = "ll" + "c" * (total_cols - 2)
-    latex_lines.append(f"\\begin{{tabular}}{{{col_spec}}}")
-    latex_lines.append(r"\toprule")
+    latex_lines += [
+        r"\begin{tabularx}{\linewidth}{" + col_spec + "}",
+        r"\toprule"
+    ]
+    # header 1 (aligned): Protein with tiny note stacked; deltas centered
+    header1 = [r"\shortstack{Protein \\ \tiny{(DS/QED/SA)}}"]
+    for thr in thresholds:
+        n_methods = len(methods_per_threshold[thr])
+        thr_ltx = thr.replace("δ", r"$\delta$")
+        header1.append(r"\multicolumn{" + str(n_methods) + "}{c}{" + thr_ltx + "}")
+    latex_lines.append(" & ".join(header1) + r" \\")
 
-    # Header row 1: thresholds with \delta
-    header1_parts = ["Protein", "Seed"]
-    for threshold in thresholds:
-        n_methods = len(methods_per_threshold[threshold])
-        # Replace δ with $\delta$
-        threshold_latex = threshold.replace("δ", "$\\delta$")
-        header1_parts.append(f"\\multicolumn{{{n_methods}}}{{c}}{{{threshold_latex}}}")
-    latex_lines.append(" & ".join(header1_parts) + r" \\")
+    # cmidrules start at column 2
+    cstart = 2
+    parts = []
+    for thr in thresholds:
+        n = len(methods_per_threshold[thr])
+        cend = cstart + n - 1
+        parts.append(f"\\cmidrule(lr){{{cstart}-{cend}}}")
+        cstart = cend + 1
+    if parts:
+        latex_lines.append(" ".join(parts))
 
-    # Add cmidrule for each threshold group
-    col_start = 3  # Start after Protein and Seed columns
-    cmidrules = []
-    for threshold in thresholds:
-        n_methods = len(methods_per_threshold[threshold])
-        col_end = col_start + n_methods - 1
-        cmidrules.append(f"\\cmidrule(lr){{{col_start}-{col_end}}}")
-        col_start = col_end + 1
-    if cmidrules:
-        latex_lines.append(" ".join(cmidrules))
-
-    # Header row 2: methods
-    header2_parts = ["", ""]  # Empty for Protein and Seed
-    for threshold in thresholds:
-        for method in methods_per_threshold[threshold]:
-            header2_parts.append(method)
-    latex_lines.append(" & ".join(header2_parts) + r" \\")
+    # header 2
+    header2 = [""]
+    for thr in thresholds:
+        header2.extend(methods_per_threshold[thr])
+    latex_lines.append(" & ".join(header2) + r" \\")
     latex_lines.append(r"\midrule")
 
-    # Data rows
+    # body
     current_protein = None
     for (protein, idx), row in df.iterrows():
-        # Get seed score for this row
         seed_score = seed_score_map.get((protein, idx), None)
+        seed_qed = seed_qed_map.get((protein, idx), None)
+        seed_sa = seed_sa_map.get((protein, idx), None)
 
-        # Find best value for this row for each threshold (excluding bracketed values)
-        best_values_per_threshold = {}
-        for threshold in thresholds:
-            values_with_method = []
-            for method in methods_per_threshold[threshold]:
-                value = row.get((threshold, method), "-")
-                mean_val, std_val = parse_value(value)
-                if mean_val is not None:
-                    # Only consider for "best" if better than seed
-                    if seed_score is None or mean_val < seed_score:
-                        values_with_method.append((mean_val, std_val, method, value))
+        # Find minimum value and its std dev per threshold among methods that beat the seed
+        min_info_per_thr = {}  # {thr: (min_value, min_std, min_method)}
+        for thr in thresholds:
+            min_val = float("inf")
+            min_std = 0.0
+            min_method = None
 
-            if values_with_method:
-                # Find minimum mean value
-                min_mean = min(v[0] for v in values_with_method)
-                best_values_per_threshold[threshold] = []
+            # First pass: find the minimum value among those that beat the seed
+            for method in methods_per_threshold[thr]:
+                v = row.get((thr, method), "-")
+                mv, sv = parse_value(v)
+                if mv is None:
+                    continue
+                if seed_score is not None and mv >= seed_score:
+                    continue
+                if mv < min_val:
+                    min_val = mv
+                    min_std = sv if sv is not None else 0.0
+                    min_method = method
 
-                # Mark all values that are best or within 1 std of best
-                for mean_val, std_val, method, orig_value in values_with_method:
-                    # Find the std of the best value(s)
-                    best_std = max(v[1] for v in values_with_method if v[0] == min_mean)
-                    # A value is marked if it's the best OR within 1 std of the best
-                    if mean_val == min_mean or mean_val <= min_mean + best_std:
-                        best_values_per_threshold[threshold].append(method)
+            if min_method is not None:
+                min_info_per_thr[thr] = (min_val, min_std, min_method)
 
-        # Add spacing between different proteins
+        # start protein block
         if protein != current_protein:
-            if current_protein is not None:
-                latex_lines.append(r"\addlinespace[0.5em]")
             current_protein = protein
-            row_data = [protein]  # Show protein name
+            protein_header = [protein] + [""] * method_col_count
+            latex_lines.append(" & ".join(protein_header) + r" \\")
+            is_first_ds_row = True
         else:
-            row_data = [""]  # Empty for repeated protein
+            is_first_ds_row = False
 
-        # Add seed score
-        if seed_score is not None:
-            seed_score_str = f"{seed_score:.1f}"
+        # DS/QED/SA left cell with in-row strut for separation (keeps vertical rule continuous)
+        if seed_score is not None and seed_qed is not None and seed_sa is not None:
+            ds_text = f"{seed_score:.1f}/{seed_qed:.3f}/{seed_sa:.2f}"
+        elif seed_score is not None:
+            ds_text = f"{seed_score:.1f}/-/-"
         else:
-            seed_score_str = str(idx)
-        row_data.append(seed_score_str)
+            ds_text = "-"
 
-        # Add data for each threshold and method
-        for threshold in thresholds:
-            for method in methods_per_threshold[threshold]:
-                value = row.get((threshold, method), "-")
-                if pd.isna(value):
-                    value_str = "-"
+        strut = r"\rule{0pt}{1.0em} " if is_first_ds_row else ""
+        left = r"\tiny{" + strut + ds_text + "}"
+        row_cells = [left]
+        # DS/QED/SA string in the single left column for this index
+        if seed_score is not None and seed_qed is not None and seed_sa is not None:
+            left = r"\tiny{"+f"{seed_score:.1f}/{seed_qed:.3f}/{seed_sa:.2f}"+"}"
+        elif seed_score is not None:
+            left = r"\tiny{"+f"{seed_score:.1f}/-/-"+"}"
+        else:
+            left = "-"
+        row_cells = [left]
+
+        # method cells
+        for thr in thresholds:
+            min_info = min_info_per_thr.get(thr)
+
+            for method in methods_per_threshold[thr]:
+                v = row.get((thr, method), "-")
+                if pd.isna(v) or v == "-":
+                    cell = "-"
                 else:
-                    value_str = str(value)
-                    # Replace ± with \pm for LaTeX
-                    value_str = value_str.replace("±", r"$\pm$")
+                    mv, sv = parse_value(v)
+                    beats_seed = (mv is not None and (seed_score is None or mv < seed_score))
 
-                    # Check if value is worse than seed (should be in brackets)
-                    mean_val, _ = parse_value(value)
-                    if mean_val is not None and seed_score is not None and mean_val >= seed_score:
-                        # Put in brackets if not better than seed
-                        value_str = f"({value_str})"
+                    # Determine if this value should be bold
+                    should_bold = False
+                    if beats_seed and min_info is not None:
+                        min_val, min_std, _ = min_info
+                        # Bold if within min ± min_std (only use the minimum's std dev)
+                        if min_std > 0:
+                            if mv <= min_val + min_std:
+                                should_bold = True
+                        else:
+                            # No std dev for minimum, only bold the exact minimum
+                            if mv == min_val:
+                                should_bold = True
+
+                    if method in your_method and mv is not None:
+                        # format InVirtuo: math number, tiny std on same line
+                        mean_str = r"\textbf{" + f"{mv:.1f}" + "}" if should_bold else f"{mv:.1f}"
+                        cell = "$" + mean_str + "$"
+                        if sv is not None and sv > 0:
+                            cell += " " + "{\\tiny (" + "$\\pm " + f"{sv:.1f}" + "$" + ")}"
                     else:
-                        # Mark best values with textbf (only if not bracketed)
-                        if threshold in best_values_per_threshold and method in best_values_per_threshold[threshold]:
-                            value_str = f"\\textbf{{{value_str}}}"
+                        # baselines: plain number; if a std is available, add tiny part
+                        if mv is not None:
+                            if sv is not None and sv > 0:
+                                val = r"$\textbf{" + f"{mv:.1f}" + "}$" if should_bold else f"${mv:.1f}$"
+                                cell = val + " " + "{\\tiny (" + "$\\pm " + f"{sv:.1f}" + "$" + ")}"
+                            else:
+                                cell = f"$\\textbf{{{mv:.1f}}}$" if should_bold else f"{mv:.1f}"
 
-                row_data.append(value_str)
+                    # parentheses if not an improvement
+                    if mv is not None and seed_score is not None and mv > seed_score:
+                        cell = f"({cell})"
 
-        latex_lines.append(" & ".join(row_data) + r" \\")
+                row_cells.append(cell)
 
-    # Add sum row
+        latex_lines.append(" & ".join(row_cells) + r" \\")
+
+    # sum row: for all methods; InVirtuo also shows inclusive in parentheses
     latex_lines.append(r"\midrule")
-    sum_row = ["\\multicolumn{2}{l}{Sum}", ""]  # Merge first two columns for "Sum"
-    for threshold in thresholds:
-        for method in methods_per_threshold[threshold]:
-            if sums[(threshold, method)] is not None:
-                sum_val = f"{sums[(threshold, method)]:.1f}"
-                # Mark best (minimum) value with \textbf
-                if method == best_per_threshold[threshold]:
-                    sum_val = f"\\textbf{{{sum_val}}}"
-                sum_row.append(sum_val)
-            else:
-                sum_row.append("-")
+    sum_row = ["\\multicolumn{1}{l}{Sum}"]
+    for thr in thresholds:
+        for method in methods_per_threshold[thr]:
+            se = sums_excl[(thr, method)]
+            si = sums_incl[(thr, method)]
+            if se is None and si is None:
+                cell = "-"
+            elif method in your_method:
 
-    # Remove the empty string we added after the multicolumn
-    sum_row = [sum_row[0]] + sum_row[2:]
+                cell = f"{se:.1f} ({si:.1f})" if se is not None and si is not None else "-"
+            else:
+                cell = f"{se:.1f}" if se is not None else "-"
+            if best_per_threshold.get(thr) == method and se is not None:
+                cell = f"$\\textbf{{{cell}}}$"
+            sum_row.append(cell)
     latex_lines.append(" & ".join(sum_row) + r" \\")
 
-    # Table footer
-    latex_lines.extend([
+    latex_lines += [
         r"\bottomrule",
-        r"\end{tabular}",
-        r"\end{table}"
-    ])
-
+        r"\end{tabularx}",
+        r"\endgroup",
+        r"\end{table}",
+    ]
     return "\n".join(latex_lines)
-
 # Main execution
 if __name__ == "__main__":
     # Raw baseline data
@@ -500,43 +619,37 @@ jak2 | -7.7 | -10.2 | -8.2 | -8.7 | -9.3 | -8.1 | -
     print("Baseline data in MultiIndex format:")
     print(baseline_df)
     print("\n" + "="*80 + "\n")
-
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--results_dir", type=str, default="/home/bkaech/projects/InVirtuoGEN/results/lead_optimization/20250813_115916")
+    parser.add_argument("--actives_csv", type=str, default="/home/bkaech/projects/public-release/in_virtuo_reinforce/docking/actives.csv")
+    args = parser.parse_args()
     # Load your results (update the path)
-    results_dir = "/home/bkaech/projects/InVirtuoGEN/results/lead_optimization/20250813_115916"
+    results_dir = args.results_dir
 
     # Check if directory exists before loading
+    actives_csv = args.actives_csv
+
     if os.path.exists(results_dir):
-        your_df = load_your_results(results_dir, method_name="InVirtuo")
-        print("Your results:")
-        print(your_df)
-        print("\n" + "="*80 + "\n")
+        your_df = load_your_results(results_dir, method_name="InVirtuoGen")
 
-        # Combine results
+        seed_metrics = {}
+
+        # Optional: keep CSV-derived seeds too, but let actives.csv override or fill gaps
+        csv_seed_metrics = extract_seed_metrics(results_dir)
+        if csv_seed_metrics:
+            seed_metrics.update(csv_seed_metrics)
+
+        actives_seed_metrics = load_seed_metrics_from_actives(actives_csv, baseline_raw_df)
+        if actives_seed_metrics:
+            seed_metrics.update(actives_seed_metrics)
+
         combined_df = combine_results(baseline_df, your_df)
-
-        # Display combined results more clearly
-        print("Combined results (first checking a sample):")
-        print(f"Sample - parp1, idx 0:")
-        print(f"  Baseline δ=0.4: GenMol={combined_df.loc[('parp1', 0), ('δ = 0.4', 'GenMol')]}, "
-              f"RetMol={combined_df.loc[('parp1', 0), ('δ = 0.4', 'RetMol')]}, "
-              f"GraphGA={combined_df.loc[('parp1', 0), ('δ = 0.4', 'GraphGA')]}")
-        print(f"  Baseline δ=0.6: GenMol={combined_df.loc[('parp1', 0), ('δ = 0.6', 'GenMol')]}, "
-              f"RetMol={combined_df.loc[('parp1', 0), ('δ = 0.6', 'RetMol')]}, "
-              f"GraphGA={combined_df.loc[('parp1', 0), ('δ = 0.6', 'GraphGA')]}")
-        print(f"  InVirtuo: δ=0.4={combined_df.loc[('parp1', 0), ('δ = 0.4', 'InVirtuo')]}, "
-              f"δ=0.6={combined_df.loc[('parp1', 0), ('δ = 0.6', 'InVirtuo')]}")
-        print("\nFull combined table (may wrap due to width):")
-        pd.set_option('display.max_columns', None)
-        pd.set_option('display.width', None)
-        print(combined_df)
-        print("\n" + "="*80 + "\n")
-
-        # Create LaTeX table
-        latex_table = create_latex_table(combined_df, baseline_raw_df=baseline_raw_df)
+        latex_table = create_latex_table(combined_df, baseline_raw_df=baseline_raw_df, seed_metrics=seed_metrics or None)
         print("LaTeX table:")
         print(latex_table)
     else:
         print(f"Warning: Results directory '{results_dir}' not found.")
+        seed_metrics = load_seed_metrics_from_actives(actives_csv, baseline_raw_df)
+        latex_table = create_latex_table(baseline_df, baseline_raw_df=baseline_raw_df, seed_metrics=seed_metrics or None)
         print("Creating LaTeX table with baseline data only:")
-        latex_table = create_latex_table(baseline_df, baseline_raw_df=baseline_raw_df)
         print(latex_table)

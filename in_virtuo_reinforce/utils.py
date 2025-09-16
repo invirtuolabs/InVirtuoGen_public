@@ -64,7 +64,7 @@ class PromptTimeDataset(Dataset):
 
 def make_dataloader(base_dataset, start_t, dt, batch_size, **dl_kwargs):
     ds = PromptTimeDataset(base_dataset, start_t, dt)
-    return DataLoader(ds, batch_size=batch_size, shuffle=True, **dl_kwargs)
+    return DataLoader(ds, batch_size=batch_size, shuffle=False, **dl_kwargs)
 
 
 def visualize_top_smiles(smiles_list, top_n=10, target="CC(C)(C)NCC(C1=CC(=C(C=C1)O)CO)O", prompts=False, pairs=False, scores=None, oracle_name="", device=0, prefix=""):
@@ -248,8 +248,234 @@ class ExperienceReplay:
 
 import numpy as np
 from typing import Dict, List
+import numpy as np
 
+class PeakSeekerBandit:
+    def __init__(self, prior_probs, lengths,
+                 tau=0.5, floor=0.02,
+                 q=0.9,           # target quantile
+                 eta_q=0.1,       # quantile learning rate
+                 w_best=0.6,      # weight on best-so-far
+                 w_quant=0.4,     # weight on high-quantile
+                 neigh_bw=3.0,    # neighborhood bandwidth
+                 ucb_c=0.1,       # exploration bonus
+                 **kwargs):
 
+        self.prior = np.asarray(prior_probs, dtype=float)
+        self.prior /= self.prior.sum()
+        self.lengths = np.asarray(lengths, dtype=int)
+
+        self.tau = float(tau)
+        self.floor = float(floor)
+        self.q = float(q)
+        self.eta_q = float(eta_q)
+        self.w_best = float(w_best)
+        self.w_quant = float(w_quant)
+        self.neigh_bw = float(neigh_bw)
+        self.ucb_c = float(ucb_c)
+
+        n = len(self.lengths)
+        self.N = np.zeros(n, dtype=int)
+        # Initialize to 0 instead of -inf to avoid NaN
+        self.best = np.zeros(n, dtype=float)
+        self.qhat = np.zeros(n, dtype=float)
+        self.t = 1
+        self.Lbest = None
+        self._rbest = 0.0
+
+    def _nearest_arm(self, L):
+        return int(np.argmin(np.abs(self.lengths - int(L))))
+
+    def _update_quantile(self, i, r):
+        # Correct quantile SGD update (pinball loss gradient)
+        if r >= self.qhat[i]:
+            self.qhat[i] += self.eta_q * self.q
+        else:
+            self.qhat[i] -= self.eta_q * (1 - self.q)
+        # Clip to valid range
+        self.qhat[i] = np.clip(self.qhat[i], 0.0, 1.0)
+
+    def _compute_scores(self):
+        # For unvisited arms, use prior as fallback
+        s = np.zeros(len(self.lengths))
+
+        # Only use best/quantile scores for visited arms
+        visited = self.N > 0
+
+        if np.any(visited):
+            # For visited arms: use best + quantile
+            s[visited] = (self.w_best * self.best[visited] +
+                         self.w_quant * self.qhat[visited])
+
+            # For unvisited arms: use prior-based scores
+            # Scale to match typical reward range [0, 1]
+            s[~visited] = 0.5 * np.log(self.prior[~visited] + 1e-12)
+        else:
+            # At initialization (no visits yet): use log prior
+            # This ensures we sample according to prior initially
+            s = np.log(self.prior + 1e-12)
+            # No need for UCB or neighborhood at t=1
+            return s
+
+        # UCB bonus for exploration (after initial phase)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            ucb = self.ucb_c * np.sqrt(np.log(max(self.t, 2)) / np.maximum(self.N, 1))
+            ucb[~visited] = self.ucb_c * 2.0  # Higher bonus for unvisited
+        s = s + ucb
+
+        # Neighborhood bump around global best
+        if self.Lbest is not None:
+            d = np.abs(self.lengths - self.Lbest)
+            neigh = np.exp(-d**2 / (2 * max(self.neigh_bw**2, 0.01)))
+            s = s + 0.2 * neigh  # Scaled neighborhood contribution
+
+        return s
+
+    def _probs(self):
+        s = self._compute_scores()
+
+        # Ensure no infinities
+        s = np.clip(s, -100, 100)
+
+        # Temperature-scaled softmax
+        z = (s - np.max(s)) / max(self.tau, 1e-6)
+        z = np.clip(z, -30, 30)
+
+        p = np.exp(z)
+        p = p / p.sum()
+
+        # Floor probability
+        p = (1.0 - self.floor) * p + self.floor / len(p)
+
+        # Final normalization
+        return p / p.sum()
+
+    def select_length(self):
+        p = self._probs()
+        i = np.random.choice(len(p), p=p)
+        return int(self.lengths[i])
+
+    def update(self, sampled_length, reward, realized_length=None):
+        if realized_length is None:
+            realized_length = sampled_length
+
+        i = self._nearest_arm(realized_length)
+        r = float(np.clip(reward, 0.0, 1.0))
+
+        self.N[i] += 1
+        self.best[i] = max(self.best[i], r)
+        self._update_quantile(i, r)
+
+        # Track global best for neighborhood shaping
+        if r > self._rbest:
+            self._rbest = r
+            self.Lbest = int(realized_length)
+
+        self.t += 1
+
+    def current_probs(self):
+        return self._probs()
+
+    def get_stats(self):
+        """Return current statistics for debugging"""
+        return {
+            'best_rewards': self.best,
+            'quantiles': self.qhat,
+            'counts': self.N,
+            'global_best_length': self.Lbest,
+            'global_best_reward': self._rbest,
+            'current_probs': self._probs()
+        }
+    def plot_distribution(self, save_path=None, log_wandb=False, global_step=0, smiles_list=None):
+        import matplotlib.pyplot as plt
+        try:
+            import wandb
+        except ImportError:
+            wandb = None
+
+        p_cur = self._probs()
+        x = self.lengths
+        w = 0.8
+
+        pastel_colors = ["#AEC6CF", "#FFB347", "#98D8C8", "#F4B6C2"]
+
+        fig, axs = plt.subplots(2, 2, figsize=(10, 8))
+
+        # Panel 1: Actual generated lengths histogram
+        if smiles_list:
+            lengths = [len(s) for s in smiles_list]
+            axs[0,0].hist(lengths, bins=range(min(lengths), max(lengths)+2),
+                        color=pastel_colors[0], edgecolor="gray", alpha=0.7)
+        axs[0,0].set_title("Generated Lengths")
+        axs[0,0].set_xlabel("Sequence length")
+        axs[0,0].set_ylabel("Count")
+
+        # Panel 2: Initial prior distribution
+        axs[0,1].bar(x, self.prior, color=pastel_colors[1], edgecolor="gray", width=w, alpha=0.7)
+        axs[0,1].set_title("Initial Prior π₀")
+        axs[0,1].set_xlabel("Sequence length")
+        axs[0,1].set_ylabel("Probability")
+
+        # Panel 3: Current sampling distribution
+        axs[1,0].bar(x, p_cur, color=pastel_colors[2], edgecolor="gray", width=w, alpha=0.7)
+        # Highlight global best length if exists
+        if self.Lbest is not None:
+            best_idx = self._nearest_arm(self.Lbest)
+            axs[1,0].bar(x[best_idx], p_cur[best_idx], color='red', edgecolor="darkred",
+                        width=w, alpha=0.9, label=f'Best L={self.Lbest}')
+            axs[1,0].legend()
+        axs[1,0].set_title("Current Sampling π")
+        axs[1,0].set_xlabel("Sequence length")
+        axs[1,0].set_ylabel("Probability")
+
+        # Make y-axes consistent for the two probability plots
+        max_prob = max(self.prior.max(), p_cur.max()) * 1.1
+        axs[0,1].set_ylim(0, max_prob)
+        axs[1,0].set_ylim(0, max_prob)
+
+        # Panel 4: Peak metrics - best rewards and quantiles
+        x_pos = np.arange(len(x))
+        width = 0.35
+
+        # Only plot for visited arms
+        visited = self.N > 0
+        if np.any(visited):
+            axs[1,1].bar(x_pos[visited] - width/2, self.best[visited], width,
+                        label='Best reward', color=pastel_colors[3], edgecolor="gray", alpha=0.7)
+            axs[1,1].bar(x_pos[visited] + width/2, self.qhat[visited], width,
+                        label=f'q={self.q:.1f} quantile', color=pastel_colors[2], edgecolor="gray", alpha=0.7)
+
+            # Mark global best
+            if self.Lbest is not None:
+                best_idx = self._nearest_arm(self.Lbest)
+                axs[1,1].scatter(x_pos[best_idx], self.best[best_idx],
+                               color='red', s=100, zorder=5, marker='*',
+                               label=f'Global best: {self._rbest:.3f}')
+
+        axs[1,1].set_title("Peak Metrics (Best & Quantiles)")
+        axs[1,1].set_xlabel("Sequence length")
+        axs[1,1].set_ylabel("Reward")
+        axs[1,1].set_xticks(x_pos[::max(1, len(x)//10)])  # Show subset of ticks if many arms
+        axs[1,1].set_xticklabels(x[::max(1, len(x)//10)])
+        axs[1,1].set_ylim(0, 1.05)
+        axs[1,1].legend(loc='upper right', fontsize=8)
+
+        # Light grid for readability
+        for ax in axs.flatten():
+            ax.grid(axis="y", linestyle="--", alpha=0.3)
+            ax.set_axisbelow(True)
+
+        plt.suptitle(f"Peak-Seeking Length Distribution (Step {global_step})", fontsize=12)
+        plt.tight_layout()
+
+        if log_wandb and wandb and wandb.run:
+            wandb.log({"bandit_distribution": wandb.Image(plt)}, step=global_step)
+
+        if save_path:
+            plt.savefig(save_path, dpi=100, bbox_inches='tight')
+            plt.close()
+        else:
+            plt.show()
 class SoftmaxBandit:
     def __init__(
         self,
@@ -257,6 +483,7 @@ class SoftmaxBandit:
         lengths,  # list/array of actual lengths
         lr=0.1,  # Q-learning rate
         beta=0.95,  # how strongly to stick to old prior
+        mean_reward=0.0,
     ):
         self.prior = np.array(prior_probs, dtype=float)
         assert np.all(self.prior >= 0) and abs(self.prior.sum() - 1.0) < 1e-6
@@ -266,14 +493,18 @@ class SoftmaxBandit:
         self.max_length = self.lengths.max()
         self.lr = lr
         self.beta = beta
-        self.Q = np.ones_like(self.prior)*0.5
+        self.Q = np.ones_like(self.prior)*mean_reward
+        self.mean_reward = mean_reward
 
         self._history = []
 
     def _compute_probs(self):
         logits = np.log(self.prior + 1e-8) + (self.Q )
         e = np.exp(logits - logits.max())
-        return e / e.sum()
+        probs = e / e.sum()
+        # Ensure minimum 1% probability per arm
+        probs = 0.95 * probs + 0.05 / len(probs)
+        return probs
 
     def select_length(self):
         p = self._compute_probs()
@@ -286,74 +517,75 @@ class SoftmaxBandit:
         length = min(length, self.max_length)
         arm = self.index_of[length]
         self.Q[arm] += self.lr * (reward - self.Q[arm])
-        self.Q *= 0.999  # Small decay factor
-        # 2) compute new posterior p
-        # p = self._compute_probs()
 
-        # # 3) blend into prior
-        # self.prior = self.beta * self.prior + (1 - self.beta) * p
-        # self.prior /= self.prior.sum()  # renormalize
+    #     # 2) compute new posterior p
+    #     # p = self._compute_probs()
+
+    #     # # 3) blend into prior
+    #     # self.prior = self.beta * self.prior + (1 - self.beta) * p
+    #     # self.prior /= self.prior.sum()  # renormalize
 
     def current_probs(self):
         return self._compute_probs()
 
     def plot_distribution(self, save_path=None, log_wandb=False, global_step=0, smiles_list=None):
-        p_cur = self._compute_probs()  # Use _compute_probs() instead of current_probs()
+        p_cur = self._compute_probs()
+
         x = self.lengths
-        w = 0.5
+        w = 0.8
 
-        pastel_colors = ["#AEC6CF", "#FFB347", "#98D8C8"]  # Added a third color for Q values
+        pastel_colors = ["#AEC6CF", "#FFB347", "#98D8C8"]
 
-        fig, axs = plt.subplots(1, 3, figsize=(12, 4), sharey=False)
+        fig, axs = plt.subplots(2, 2, figsize=(8, 8))
 
-        # Actual length distribution from generated SMILES
+        # Panel 1: Actual generated lengths histogram
         if smiles_list:
             lengths = [len(s) for s in smiles_list]
-            axs[0].hist(lengths, bins=max(lengths)-min(lengths), color=pastel_colors[0], edgecolor="gray")
-        axs[0].set_title("Generated Length Distribution")
-        axs[0].set_xlabel("Sequence length")
-        axs[0].set_ylabel("Frequency")
+            axs[0,0].hist(lengths, bins=range(min(lengths), max(lengths)+2),
+                        color=pastel_colors[0], edgecolor="gray", alpha=0.7)
+        axs[0,0].set_title("Generated Lengths")
+        axs[0,0].set_xlabel("Sequence length")
+        axs[0,0].set_ylabel("Count")
 
-        # Initial prior (unchanged)
-        axs[1].bar(x, self.prior, color=pastel_colors[0], edgecolor="gray", width=w)
-        axs[1].set_title("Initial Prior π₀")
-        axs[1].set_xlabel("Sequence length")
-        axs[1].set_ylabel("Probability")
+        # Panel 2: Initial prior distribution
+        axs[0,1].bar(x, self.prior, color=pastel_colors[1], edgecolor="gray", width=w, alpha=0.7)
+        axs[0,1].set_title("Initial Prior π₀")
+        axs[0,1].set_xlabel("Sequence length")
+        axs[0,1].set_ylabel("Probability")
 
-        # Current distribution (prior + Q)
-        axs[2].bar(x, p_cur, color=pastel_colors[1], edgecolor="gray", width=w)
-        # Overlay Q values as a line plot to show adjustments
-        ax2_twin = axs[2].twinx()
-        ax2_twin.plot(x, self.Q, 'o-', color='red', alpha=0.6, label='Q values')
-        ax2_twin.set_ylabel('Q value', color='red')
-        ax2_twin.tick_params(axis='y', labelcolor='red')
-        ax2_twin.axhline(y=0, color='red', linestyle='--', alpha=0.3)
+        # Panel 3: Current sampling distribution
+        axs[1,0].bar(x, p_cur, color=pastel_colors[2], edgecolor="gray", width=w, alpha=0.7)
+        axs[1,0].set_title("Current Sampling π")
+        axs[1,0].set_xlabel("Sequence length")
+        axs[1,0].set_ylabel("Probability")
 
-        axs[2].set_title(f"Current π (Prior + Q)")
-        axs[2].set_xlabel("Sequence length")
-        axs[2].set_ylabel("Probability")
+        # Make y-axes consistent for the two probability plots
+        max_prob = max(self.prior.max(), p_cur.max()) * 1.1
+        axs[1,0].set_ylim(0, max_prob)
 
-        # Adjust y-limits for probability plots
-        max_prob = max(self.prior.max(), p_cur.max())
-        axs[1].set_ylim(0, max_prob * 1.1)
-        axs[2].set_ylim(0, max_prob * 1.1)
+        # Panel 4: Q-values
+        axs[1,1].bar(x, self.Q, color=pastel_colors[2], edgecolor="gray", width=w, alpha=0.7)
+        axs[1,1].bar(x , np.log(self.prior + 1e-8), color=pastel_colors[1], edgecolor="gray", width=w, alpha=0.7)
+        axs[1,1].set_title("Q-values")
+        axs[1,1].set_xlabel("Sequence length")
+        axs[1,1].set_ylabel("Q-value")
 
-        # Add grids
-        for ax in axs:
+        # Light grid for readability
+        for ax in axs.flatten():
             ax.grid(axis="y", linestyle="--", alpha=0.3)
+            ax.set_axisbelow(True)
 
+        plt.suptitle(f"Length Distribution Evolution (Step {global_step})", fontsize=12)
         plt.tight_layout()
 
         if log_wandb and wandb.run:
             wandb.log({"bandit_distribution": wandb.Image(plt)}, step=global_step)
 
         if save_path:
-            plt.savefig(save_path)
+            plt.savefig(save_path, dpi=100, bbox_inches='tight')
             plt.close()
         else:
             plt.show()
-
-
 
 
 class GeneticPrompter:
@@ -374,6 +606,8 @@ class GeneticPrompter:
         pad_id: int = 3,
         score_based=False,
         vocab_size=10,
+        min_tanimoto_dist=0.7,
+        start_rank=0,
     ):
         self.tokenizer = tokenizer
         self.bandit = bandit
@@ -388,7 +622,8 @@ class GeneticPrompter:
         self.vocab_fps = {}
         self.population = []
         self.close = False
-        self.min_tanimoto_dist = 0.7
+        self.start_rank = start_rank
+        self.min_tanimoto_dist = min_tanimoto_dist
         self.score_based = score_based
         self.vocab_size = vocab_size
         # vocab of fragments (with attachment points)
@@ -480,7 +715,7 @@ class GeneticPrompter:
         for _ in range(self.offspring_size):
 
 
-            i1, i2 = rank_based_sampling(self.vocab, 2, kappa=self.kappa)
+            i1, i2 = rank_based_sampling(self.vocab, 2, kappa=self.kappa, start_rank=self.start_rank    )
             i1 = torch.tensor(i1)
             i2 = torch.tensor(i2)
             p1_list.append(i1)
@@ -491,13 +726,11 @@ class GeneticPrompter:
         P2 = self.pad_seqs(p2_list).to(dev)
 
         prompt_tensors: List[torch.Tensor] = []
-        # n_oracle = []
         for b in range(B):
             ids1 = P1[b][P1[b] != pad_id]
             ids2 = P2[b][P2[b] != pad_id]
             toks = self._fragment_prompter(ids1, ids2, n_oracle[b])
             prompt_tensors.append(torch.tensor(toks, device=dev))
-            # n_oracle.append(self.bandit.select_length())
         # pad and sort
         prompts = self.pad_seqs(prompt_tensors).long()
 
@@ -511,17 +744,15 @@ class GeneticPrompter:
         smi2 = bridge_smiles_fragments(custom_decode_sequence(self.tokenizer, p2_ids).split())
         fr1 = decompose_smiles(smi1, self.max_frags, sort=True)
         fr2 = decompose_smiles(smi2, self.max_frags, sort=True)
-        if self.close:
-            frags = fr1
-        else:
-            frags = fr1[:-self.K] + fr2[-self.K:] if len(fr1) < 7 else fr1[:-2] + fr2[-2:]
-        random.shuffle(frags)  # if not self.close else None
-        frags += fr1[-self.K:] + fr2[:-self.K] if len(fr1) < 7 else fr1[:-2] + fr2[-2:]
+        if random.random() < 0.5:
+            random.shuffle(fr1)
+            random.shuffle(fr2)
+        frags = fr1[:-1] + fr2[-1:]
         kept = " ".join(frags)  # +" "
-        return self.tokenizer.encode(kept)[:n_oracle]
+        return self.tokenizer.encode(kept)[:n_oracle]#
 
 
-def rank_based_sampling(smiles_scores: Dict[str, float], n_select: int, kappa: float = 0.1) -> List[str]:
+def rank_based_sampling(smiles_scores: Dict[str, float], n_select: int, kappa: float = 0.1, start_rank: int = 0) -> List[str]:
     """
     Rank‐based sampling without replacement over a smiles→score dict.
 
@@ -547,7 +778,7 @@ def rank_based_sampling(smiles_scores: Dict[str, float], n_select: int, kappa: f
     # 3) assign ranks (best rank=1, second=2, ..., worst=N)
     ranks = np.empty(N, dtype=np.int64)
 
-    ranks[sorted_idx] = np.arange(1, N+1)
+    ranks[sorted_idx] = np.arange(start_rank, N+start_rank)
 
     # 4) compute weight ∝ 1 / (κ·N + rank)
     denom = kappa * N + ranks
