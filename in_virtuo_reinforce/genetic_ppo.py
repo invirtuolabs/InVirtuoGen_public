@@ -68,6 +68,7 @@ class OptimizerConfig:
     experience_replay_size: int
     train_mutation: bool
     aggressive_bandit: bool
+    entropy_bonus: bool
     # Additional configs that might be passed via *args, **kwargs
     max_oracle_calls: int
     no_sample_uni: bool
@@ -81,60 +82,6 @@ class OptimizerConfig:
     classic_ga: bool
     start_rank: int = 0
     max_frags: int = 5
-
-
-def compute_kl_divergence(logits_new, logits_old, source_mask, reverse=False):
-    """Compute KL divergence for PPO: KL(π_new || π_old)"""
-    if reverse:
-        logits_new, logits_old = logits_old, logits_new
-    kl_per_token = F.kl_div(F.log_softmax(logits_old, dim=-1), F.log_softmax(logits_new, dim=-1), reduction="none", log_target=True).sum(dim=-1)  # input  # target
-
-    # The above actually computes -KL(old || new), so we need to flip it
-    # For proper KL(new || old), we should use:
-    p_new = F.softmax(logits_new, dim=-1)
-    log_p_new = F.log_softmax(logits_new, dim=-1)
-    log_p_old = F.log_softmax(logits_old, dim=-1)
-
-    kl_per_token = (p_new * (log_p_new - log_p_old)).sum(dim=-1)
-
-    # Apply mask and average
-    kl = (kl_per_token * source_mask.float()).sum() / source_mask.float().sum().clamp(min=1)
-    return kl
-
-
-def pad_collate_with_masks(batch):
-    """
-    Collate function for batches without replay masks (7 elements per sample).
-    """
-    ids, scores, uni, t, logprobs, x_ts, masks = zip(*batch)
-
-    # Pad sequences
-    ids_padded = pad_sequence(list(ids), batch_first=True, padding_value=0)
-    uni_padded = pad_sequence(list(uni), batch_first=True, padding_value=0)
-
-    # Convert scalars
-    scores = torch.tensor(scores, dtype=torch.float, device=ids_padded.device)
-    t = torch.tensor(t, dtype=torch.float, device=ids_padded.device)
-
-    # Stack logprobs (these should already have the same shape)
-    logprobs = torch.stack(logprobs, dim=0)
-
-    # Handle x_ts and masks with variable sequence lengths
-    batch_size = len(batch)
-    num_timesteps = x_ts[0].shape[0]  # Should be num_timesteps
-    max_seq_len = ids_padded.shape[1]  # Maximum sequence length after padding
-
-    # Initialize padded tensors
-    x_ts_padded = torch.zeros(batch_size, num_timesteps, max_seq_len, dtype=x_ts[0].dtype, device=ids_padded.device)
-    masks_padded = torch.zeros(batch_size, num_timesteps, max_seq_len, dtype=masks[0].dtype, device=ids_padded.device)
-
-    # Fill in the values
-    for i, (x_t, mask) in enumerate(zip(x_ts, masks)):
-        seq_len = x_t.shape[-1]  # Original sequence length
-        x_ts_padded[i, :, :seq_len] = x_t
-        masks_padded[i, :, :seq_len] = mask
-
-    return ids_padded, scores, uni_padded, t, logprobs, x_ts_padded, masks_padded
 
 
 def sample_path(t, x_0, x_1, n=1):
@@ -486,8 +433,11 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             surr1 = ratio * adv
             surr2 = torch.clamp(ratio, 1 - self.config.clip_eps, 1 + self.config.clip_eps) * adv
             pg_loss = -torch.min(surr1, surr2).mean()
-            loss = pg_loss / num_batches  # - 0.01 * entropy.mean()
-
+              # - 0.01 * entropy.mean()
+            if self.config.entropy_bonus:
+                loss =  pg_loss / num_batches - 0.01 * entropy.mean()/num_batches
+            else:
+                loss = pg_loss / num_batches
             if torch.isnan(loss) or torch.isinf(loss):
                 continue
 
@@ -802,6 +752,7 @@ if __name__ == "__main__":
     parser.add_argument("--start_rank", type=int, default=0)
     parser.add_argument("--no_mask", action="store_true")
     parser.add_argument("--classic_ga", action="store_true")
+    parser.add_argument("--entropy_bonus", action="store_true")
     # Then in your config setup, add:
     args = parser.parse_args()
     device = f"cuda:{args.device}" if len(args.device) == 1 else args.device
