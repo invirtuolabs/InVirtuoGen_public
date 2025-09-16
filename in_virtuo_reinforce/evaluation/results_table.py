@@ -99,7 +99,7 @@ if args.ablation_mode:
 
     # Generate LaTeX table for ablation study
     latex = []
-    latex.append(r"\begin{table}[ht]")
+    latex.append(r"\begin{sidewaystable}[ht]")
     latex.append(r"\centering")
     latex.append(r"\caption{Ablation study results on the PMO benchmark. We report the AUC-top10 scores from single runs. Best results are highlighted in bold.}")
     latex.append(r"\label{tab:ablation}")
@@ -146,8 +146,7 @@ if args.ablation_mode:
     latex.append(f"\\textbf{{Sum}} & " + " & ".join(sum_fmt) + r" \\")
     latex.append(r"\bottomrule")
     latex.append(r"\end{tabularx}")
-    latex.append(r"\end{table}")
-
+    latex.append(r"\end{sidewaystable}")
     output_file = "ablation_study_table.tex"
 
 else:
