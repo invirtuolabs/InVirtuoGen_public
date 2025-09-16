@@ -12,7 +12,7 @@ mamba activate invgen
 pip install -r requirements.txt
 pip install -e .
 ```
-We also provide a Dockerfile for aarch64-based environments - the results from the paper were produced within the corresponding Docker container and should be reproducible - although we could not check it on another cluster. 
+We also provide a Dockerfile for aarch64-based environments - the results from the paper were produced within the corresponding Docker container and should be reproducible - although we could not check it on another cluster.
 ### Download Checkpoints
 ```bash
 mkdir checkpoints && cd checkpoints
@@ -275,21 +275,12 @@ No Prompter, No Mutation:
 
 
 
-**Key Advantages:**
-- **Uniform Source Distribution** - Enables global iterative refinement vs. autoregressive/masked completion
-- **Decoupled Sampling** - Number sampling steps independent of sequence length
-- **Fragment-Level Control** - Direct manipulation of chemically meaningful substructures
-- **Integrated Optimization** - Seamless GA + PPO for property-targeted generation and lead optimization
-
-**Architecture:**
-- Discrete flows model with diffusion transformer backbone
-- Fragmented SMILES with numbered attachment points `[1*], [2*], [3*]`
-- Character-level tokenization (204-token vocabulary)
-- Bidirectional attention for context modeling
 
 
 ## 📄 Citation
 
-To BE DONE
+After Unblinding
 
 ## 📧 Contact
+
+After Unblinding
