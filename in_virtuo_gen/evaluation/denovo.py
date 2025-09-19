@@ -31,7 +31,7 @@ def plot_multi_model_quality_vs_diversity(
     logger=None,
 ):
     """
-    Plot mean±std for each (T, r) with IVGEN styling and reference curves.
+    Plot mean±std for each (T, r) with InVirtuoGen styling and reference curves.
     Each entry in mean_results_list/std_results_list corresponds to one model name.
     """
     if colors is None:
@@ -42,14 +42,24 @@ def plot_multi_model_quality_vs_diversity(
             "dt 0.001": "#002854",
         }
     label_map = {
-        "dt 0.1":  "IVGEN (h=0.1)",
-        "dt 0.01": "IVGEN (h=0.01)",
-        "dt 0.02": "IVGEN (h=0.02)",
-        "dt 0.001":"IVGEN (h=0.001)",
+        "dt 0.1":  "InVirtuoGen (h=0.1)",
+        "dt 0.01": "InVirtuoGen (h=0.01)",
+        "dt 0.02": "InVirtuoGen (h=0.02)",
+        "dt 0.001":"InVirtuoGen (h=0.001)",
     }
     marker_map = {"dt 0.001": "o", "dt 0.01": "x", "dt 0.02": "x", "dt 0.1": "."}
 
     fig, ax = plt.subplots(figsize=(8, 6))
+    # before your loop
+    label_offsets = {
+        (1, 0): (8, 6),
+        (1, 1): (8, 0),
+        (1, 2): (-30, -10),
+        (2, 4): (4, -6),
+        (3, 4): (6, -12),
+        (3, 5): (6, -6),
+        (3, 6): (6, 4),
+    }
 
     for mean_res, std_res, name in zip(mean_results_list, std_results_list, model_names):
         pairs = sorted(pairs_dict[name], key=lambda pr: mean_res[pr]["diversity"])
@@ -58,14 +68,30 @@ def plot_multi_model_quality_vs_diversity(
         σds = [std_res[p]["diversity"]  for p in pairs]
         σqs = [std_res[p]["quality"]    for p in pairs]
         for i, p in enumerate(pairs):
-            if label_map.get(name, name) == "IVGEN (h=0.001)":
+            # if label_map.get(name, name) == "InVirtuoGen (h=0.001)":
+            #     annotation_text = f"     ({p[0]}, {p[1]})"
+            #     ax.annotate(annotation_text, (μds[i], μqs[i]), textcoords="offset points", xytext=(1, 1), fontsize=9, color=colors.get(name))
+            if label_map.get(name, name) == "InVirtuoGen (h=0.001)":
+                p_tuple = tuple(p)  # assuming p like (k, n)
+                dx, dy = label_offsets.get(p_tuple, (6, 6))
                 annotation_text = f"({p[0]}, {p[1]})"
-                ax.annotate(annotation_text, (μds[i], μqs[i]), textcoords="offset points", xytext=(1, 1), fontsize=9, color=colors.get(name))
+                ax.annotate(
+                    annotation_text,
+                    xy=(μds[i], μqs[i]),
+                    xytext=(dx, dy),
+                    textcoords="offset points",
+                    ha="left",
+                    va="bottom",
+                    fontsize=9,
+                    color=colors.get(name),
+                    clip_on=True,
+                    zorder=5,
+                )
         c = colors.get(name, "#524fd1")
         lbl = label_map.get(name, name)
         ax.errorbar(
             μds, μqs, xerr=σds, yerr=σqs,
-            fmt=marker_map.get(name, "o")+"-",
+            fmt=marker_map.get(name, "o")+"-" if name!="SAFE-GPT" else "o",
             color=c, ecolor=c, elinewidth=1.5, capsize=3,
             markersize=6, linewidth=2, label=lbl
         )
@@ -78,7 +104,7 @@ def plot_multi_model_quality_vs_diversity(
 
     ax.plot(Gen_d, Gen_q, "o--", color="#76b900", markersize=6, linewidth=1.5, label="GenMol")
 
-    ax.plot(Safe_d, Safe_q, "o--", color="black", markersize=6, linewidth=1.5, label="SAFE-GPT")
+    ax.plot(Safe_d, Safe_q, "o", color="black", markersize=6, linewidth=1.5, label="SAFE-GPT")
 
     ax.set_xlabel("Diversity", fontsize=18)
     ax.set_ylabel("Quality", fontsize=18)

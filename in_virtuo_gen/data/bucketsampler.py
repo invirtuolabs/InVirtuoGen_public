@@ -28,7 +28,7 @@ class BucketSampler:
 
         # Build a dictionary mapping a bucket label to its info.
         self.buckets = {}
-        assert len(bucket_file_paths) > 0, "No bucket files found in {bucket}".format(bucket_file_paths)
+        assert len(bucket_file_paths) > 0, "No bucket files found in {}".format(bucket_file_paths)
 
         for path in bucket_file_paths:
             base = os.path.basename(path)

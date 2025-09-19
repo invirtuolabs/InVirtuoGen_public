@@ -163,14 +163,17 @@ else:
     reference["Oracle"] = reference["Oracle"].str.replace("_", " ")
 
     if args.exclude_prescreen:
-        ref_methods = ["Genetic GFN", "Mol GA", "REINVENT", "Graph GA"]
+        ref_methods = ["Genetic GFN", "Mol GA", "REINVENT", ]#"Graph GA"
     else:
         ref_methods = ["GenMol", "f-RAG"]
 
     # Create missing std columns as NaN
     for method in ref_methods:
         std_col = f"{method}_std"
-        reference[std_col] = np.nan
+
+        print(method,reference[std_col])
+        if reference[std_col].sum() == 0:
+            reference[std_col] = np.nan
 
     # Create missing sum std columns as NaN
     for method in ref_methods:
@@ -179,11 +182,13 @@ else:
             reference[sum_std_col] = np.nan
 
     merged = pd.merge(summary, reference, on="Oracle", how="left")
+    print("merged", merged)
     if args.exclude_prescreen:
-        methods = ["mean10", "Genetic GFN", "Mol GA", "REINVENT", "Graph GA"]
-        std_methods = ["std10", "Genetic GFN_std", "Mol GA_std", "REINVENT_std", "Graph GA_std"]
-        sum_std_methods = ["invirtuo_sum_std", "Genetic GFN_sum_std", "Mol GA_sum_std", "REINVENT_sum_std", "Graph GA_sum_std"]
-        latex_headers = ["InVirtuoGen (no prescreen)", "Gen. GFN", "Mol GA", "REINVENT", "Graph GA"]
+        methods = ["mean10", "Genetic GFN", "Mol GA", "REINVENT"]#, "Graph GA"
+        std_methods = ["std10", "Genetic GFN_std", "Mol GA_std", "REINVENT_std", ]#"Graph GA_std"
+        sum_std_methods = ["invirtuo_sum_std", "Genetic GFN_sum_std", "Mol GA_sum_std", "REINVENT_sum_std",] #"Graph GA_sum_std"
+
+        latex_headers = ["InVirtuoGen (no prescreen)", "Gen. GFN", "Mol GA", "REINVENT"]#, "Graph GA"
     else:
         methods = ["mean10", "GenMol", "f-RAG"]
         std_methods = ["std10", "GenMol_std", "f-RAG_std"]

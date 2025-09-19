@@ -80,6 +80,7 @@ class OptimizerConfig:
     no_mask: bool
     no_bandit: bool
     classic_ga: bool
+    eta: float
     start_rank: int = 0
     max_frags: int = 5
 
@@ -439,6 +440,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             else:
                 loss = pg_loss / num_batches
             if torch.isnan(loss) or torch.isinf(loss):
+                print("loss is nan or inf")
                 continue
 
             loss.backward()
@@ -446,7 +448,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
             avg_grad_norm += grad_norm
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=2)
 
-            if i % (len(loader)//self.config.num_reinforce_steps) == (len(loader)//self.config.num_reinforce_steps) - 1:
+            if i % max(1, len(loader)//self.config.num_reinforce_steps) == max(1, len(loader)//self.config.num_reinforce_steps) - 1:
                 self.global_step += 1
 
                 wandb.log(
@@ -557,7 +559,7 @@ class InVirtuoFMOptimizer(BaseOptimizer):
                 fade_prompt=False,
                 dt=self.config.dt,
                 temperature_scaling=False,
-                eta=1,
+                eta=self.config.eta,
                 return_uni=True,
             )
         valid, all_smiles, metrics = evaluate_smiles(all_seqs, self.tokenizer, exclude_salts=True, return_values=True, print_flag=False, print_metrics=False, return_unique_indices=True)
@@ -753,6 +755,7 @@ if __name__ == "__main__":
     parser.add_argument("--no_mask", action="store_true")
     parser.add_argument("--classic_ga", action="store_true")
     parser.add_argument("--entropy_bonus", action="store_true")
+    parser.add_argument("--eta", type=float, default=1.0)
     # Then in your config setup, add:
     args = parser.parse_args()
     device = f"cuda:{args.device}" if len(args.device) == 1 else args.device
