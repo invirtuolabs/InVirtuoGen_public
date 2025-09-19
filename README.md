@@ -25,10 +25,7 @@ cd ..
 - `invirtuo_gen.ckpt` - Standard model for general use
 - `invirtuo_gen_big.ckpt` - Larger model for optimal performance
 
-# 🧪 Core Capabilities
-
-## 1. De Novo Molecule Generation
-Generate novel drug-like molecules with controllable quality-diversity trade-offs.
+Generate novel drug-like molecules
 
 **Quick Generation:**
 ```bash
@@ -37,6 +34,10 @@ python -m in_virtuo_gen.generate \
     --num_samples 1000 \
     --batch_size 200
 ```
+
+# Reproduce Results in Paper
+
+## 1. De Novo Molecule Generation
 
 ### Reproduce Quality-Diversity Analysis:
 ![Quality vs Diversity](plots/quality_vs_diversity.png)
@@ -267,6 +268,7 @@ python -m in_virtuo_reinforce.genetic_ppo --ckpt checkpoints/invirtuo_gen.ckpt -
 | -8.0/0.712/3.09     | -10.0          | -9.0           | -9.2            | **-11.6 (±0.9)**    | -9.4           | -              | -9.2            | **-10.8 (±0.5)**    |
 | -8.6/0.482/3.10     | -9.8           | -              | -               | **-10.6 (±0.3)**    | -              | -              | -               | **-9.9 (±1.4)**     |
 | **Sum**             | -148.7         | -88.5          | -96.3           | **-158.7 (-167.1)** | -117.7         | -25.7          | -74.8           | **-146.2 (-153.5)** |
+
 **Commands**
 ```bash
  python -m in_virtuo_reinforce.ppo_docking --device 1 --start_t 0. --offspring_size 50 --seed 0 --max_oracle_calls 1000 --num_reinforce_steps 50 --clip_eps 0.5 --start_task 0 --experience_replay_size 100 --dt 0.01 --c_neg 1 --dt 0.01 --tot_offspring 100 --vocab_size 10 --num_timesteps 50
