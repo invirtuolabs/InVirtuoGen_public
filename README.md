@@ -38,7 +38,7 @@ python -m in_virtuo_gen.generate \
     --batch_size 200
 ```
 
-## Reproduce Quality-Diversity Analysis:
+### Reproduce Quality-Diversity Analysis:
 ![Quality vs Diversity](plots/quality_vs_diversity.png)
 (~6h on RTX 4090 for 3 seeds)
 ```bash
@@ -91,9 +91,6 @@ python -m in_virtuo_reinforce.preprocess.get_vocab \
 ```
 
 
-
-
-
 ### With Prescreening ZINC250k:
 State-of-the-art results on PMO benchmark
 
@@ -124,17 +121,17 @@ State-of-the-art results on PMO benchmark
 | zaleplon mpo             | **0.624 (±0.040)**       | **0.584** | 0.486  |
 | **Sum**                  | **18.993 (±0.219)**      | 18.362  | 16.928 |
 
-### Results Table
+ **Results Table**
 
  ```bash
  python -m in_virtuo_reinforce.evaluation.results_table --results_root results/target_property/prescreen_3_runs --incl
  ```
- ### Reproduce Results (**Run Optimization (~36h on RTX 4090 for 3 seeds):**)
+**Reproduce Results - Run Optimization (~36h on RTX 4090 for 3 seeds):**
  Command:
  ```bash
 python -m in_virtuo_reinforce.genetic_ppo --ckpt checkpoints/invirtuo_gen.ckpt --device 0 --start_t 0. --offspring_size 50 --num_timesteps 50 --num_reinforce_steps 10 --clip_eps 0.2 --dt 0.01 --experience_replay 0 --vocab_size 10 --lr 0.1 --use_prompter --use_mut --train_mut --first_pop_size 10 --aggressive_bandit --max_oracle_calls 10000 --c_neg 1 --mutation_size 20 --rl_lr 0.00001 --tot_offspring_size 100  --start_rank 1 --use_prescreen
 ```
-## Without Prescreening ZINC250k:
+### Without Prescreening ZINC250k:
 
 State-of-the-art results on PMO benchmark
 | Oracle                   | InVirtuoGen (no prescreen) | Gen. GFN | Mol GA | REINVENT | Graph GA |
@@ -165,53 +162,54 @@ State-of-the-art results on PMO benchmark
 | **Sum**                  | **16.676 (±0.256)**        | 16.213   | 14.708 | 14.184   | 13.742   |
 
 
-### Results Table
+ **Results Table**
 ```bash
 python -m in_virtuo_reinforce.evaluation.results_table --results_root results/target_property/no_prescreen_3_runs --include_std --exclude_prescreen
 ```
- ### Reproduce Results (**Run Optimization (~36h on RTX 4090 for 3 seeds):**)
+**Reproduce Results - Run Optimization (~36h on RTX 4090 for 3 seeds):**
 ```bash
 python -m in_virtuo_reinforce.genetic_ppo --ckpt checkpoints/invirtuo_gen.ckpt --device 0 --start_t 0. --offspring_size 50 --num_timesteps 50 --num_reinforce_steps 5 --clip_eps 0.2 --dt 0.01 --experience_replay 300 --vocab_size 10 --lr 0.1 --use_prompter --use_mut --train_mut --first_pop_size 100 --aggressive_bandit --max_oracle_calls 10000 --c_neg 1 --mutation_size 20 --rl_lr 0.00001 --tot_offspring_size 100 --start_rank 1
 ```
 
-## 3.b Ablations:
-### Results Table
+### 3.b Ablations:
+**Results Table**
 ```bash
 python  -m in_virtuo_reinforce.evaluation.results_table --ablation_mode \
  --results_path results/target_property/prescreen_with_exp results/target_property/prescreen_eta999  results/target_property/prescreen_no_bandit results/target_property/prescreen_no_mutation   results/target_property/prescreen_no_ppo results/target_property/no_prescreen_no_experience_replay results/target_property/no_prescreen_no_prompter_no_mut \
   --model_names  "With Experience Replay" "Sampling with eq.~\ref{eq:our_update}" "No Bandit" "No Mutation" "No PPO" "No Prescreen, No Experience Replay" "No Prompter, No Mutation, No Prescreen"
 ```
-### Commands:
+**Commands:**
 With Experience Replay
 ```bash
 -m in_virtuo_reinforce.genetic_ppo --ckpt checkpoints/invirtuo_gen.ckpt --device 0 --start_t 0. --offspring_size 50 --num_timesteps 50 --num_reinforce_steps 10 --clip_eps 0.2 --dt 0.01 --experience_replay 300 --vocab_size 10 --lr 0.1 --first_pop_size 10 --aggressive_bandit --max_oracle_calls 10000 --c_neg 1 --mutation_size 20 --rl_lr 0.00001 --tot_offspring_size 100 --start_seed 1 --start_rank 1 --use_prescreen --use_prompter --use_mutation --train_mutation
 ```
-### Commands:
+**Commands:**
 No Bandit:
 ```bash
 python -m in_virtuo_reinforce.genetic_ppo --ckpt checkpoints/invirtuo_gen.ckpt --device 0 --start_t 0. --offspring_size 50 --num_timesteps 50 --num_reinforce_steps 10 --clip_eps 0.2 --dt 0.01 --experience_replay 0 --vocab_size 10 --lr 0.1 --first_pop_size 10 --aggressive_bandit --max_oracle_calls 10000 --c_neg 1 --mutation_size 20 --rl_lr 0.00001 --tot_offspring_size 100 --start_rank 1 --use_prescreen --use_prompter --use_mutation --train_mutation --no_bandit
 ```
-### Commands:
+**Commands:**
 No Mutation:
 ```bash
 python -m in_virtuo_reinforce.genetic_ppo --ckpt checkpoints/invirtuo_gen.ckpt --device 0 --start_t 0. --offspring_size 20 --num_timesteps 50 --num_reinforce_steps 10 --clip_eps 0.2 --dt 0.01 --use_prompter --experience_replay 300 --lr 0.1 --vocab_size 10 --first_pop_size 10 --aggressive_bandit --max_oracle_calls 10000 --c_neg 1 --mutation_size 20 --rl_lr 0.00005 --tot_offspring_size 100 --use_prescreen --num_seeds 1 --start_rank 1
 ```
-### Commands:
+**Commands:**
 no PPO:
 ```bash
 python -m in_virtuo_reinforce.genetic_ppo --ckpt checkpoints/invirtuo_gen.ckpt --device 0 --start_t 0. --offspring_size 10 --num_timesteps 0 --num_reinforce_steps 0 --clip_eps 0.2 --dt 0.01 --use_prompter --experience_replay 300 --lr 0.1 --vocab_size 10 --first_pop_size 100 --aggressive_bandit --max_oracle_calls 10000 --c_neg 1 --mutation_size 20 --rl_lr 0.00005 --tot_offspring_size 100 --use_prescreen --num_seeds 1 --start_rank 1
 ```
 
-### Commands:
+**Commands:**
 No Experience Replay:
 ```bash
 -m in_virtuo_reinforce.genetic_ppo --ckpt checkpoints/invirtuo_gen.ckpt --device 0 --start_t 0. --offspring_size 50 --num_timesteps 50 --num_reinforce_steps 5 --clip_eps 0.2 --dt 0.01 --experience_replay 0 --vocab_size 10 --lr 0.1 --first_pop_size 100 --aggressive_bandit --max_oracle_calls 10000 --c_neg 1 --mutation_size 20 --rl_lr 0.00001 --tot_offspring_size 100 --start_rank 1 --use_prompter --use_mutation --train_mutation
 ```
-### Commands:
+**Commands:**
 No Prompter, No Mutation:
  ```bash
  python -m in_virtuo_reinforce.genetic_ppo --ckpt checkpoints/invirtuo_gen.ckpt --device 0 --start_t 0. --offspring_size 100 --num_timesteps 50 --num_reinforce_steps 10 --clip_eps 0.2 --dt 0.01 --experience_replay 300 --lr 0.1 --first_pop_size 100 --aggressive_bandit --max_oracle_calls 10000 --c_neg 1 --mutation_size 20 --rl_lr 0.00005 --tot_offspring_size 100 --num_seeds 1 --start_rank 1
 ```
+**Commands:**
 Our Sampling:
 ```bash
 python -m in_virtuo_reinforce.genetic_ppo --ckpt checkpoints/invirtuo_gen.ckpt --device 0 --start_t 0. --offspring_size 50 --num_timesteps 50 --num_reinforce_steps 10 --clip_eps 0.2 --dt 0.01 --experience_replay 0 --vocab_size 10 --lr 0.1 --first_pop_size 10 --aggressive_bandit --max_oracle_calls 10000 --c_neg 1 --mutation_size 20 --rl_lr 0.00001 --tot_offspring_size 100 --use_prompter --use_mutation --train_mutation --use_prescreen --eta 999
@@ -244,7 +242,7 @@ python -m in_virtuo_reinforce.genetic_ppo --ckpt checkpoints/invirtuo_gen.ckpt -
 | zaleplon mpo             | 0.617                  | 0.605     | 0.576       | **0.653** | 0.520                           | 0.458                                 |
 | **Sum**                  | **18.893**             | 18.782    | 17.831      | 17.758 | 16.131                            | 14.349                                |
 
-### 4. Lead Optimization:
+## 4. Lead Optimization:
 (We were unable to install the required dependencies for these experiments in the Dockerfile on an aarch64 environment. On ARM systems, the setup works by simply running pip install -r requirements.txt). Also we can not guarantee exact reproducability here, due to the stochasticity of the docking with openVINA.
 | Protein (DS/QED/SA) | GenMol (δ=0.4) | RetMol (δ=0.4) | GraphGA (δ=0.4) | InVirtuoGen (δ=0.4) | GenMol (δ=0.6) | RetMol (δ=0.6) | GraphGA (δ=0.6) | InVirtuoGen (δ=0.6) |
 |---------------------|----------------|----------------|-----------------|---------------------|----------------|----------------|-----------------|---------------------|
@@ -269,14 +267,22 @@ python -m in_virtuo_reinforce.genetic_ppo --ckpt checkpoints/invirtuo_gen.ckpt -
 | -8.0/0.712/3.09     | -10.0          | -9.0           | -9.2            | **-11.6 (±0.9)**    | -9.4           | -              | -9.2            | **-10.8 (±0.5)**    |
 | -8.6/0.482/3.10     | -9.8           | -              | -               | **-10.6 (±0.3)**    | -              | -              | -               | **-9.9 (±1.4)**     |
 | **Sum**             | -148.7         | -88.5          | -96.3           | **-158.7 (-167.1)** | -117.7         | -25.7          | -74.8           | **-146.2 (-153.5)** |
-### Commands
+**Commands**
 ```bash
  python -m in_virtuo_reinforce.ppo_docking --device 1 --start_t 0. --offspring_size 50 --seed 0 --max_oracle_calls 1000 --num_reinforce_steps 50 --clip_eps 0.5 --start_task 0 --experience_replay_size 100 --dt 0.01 --c_neg 1 --dt 0.01 --tot_offspring 100 --vocab_size 10 --num_timesteps 50
 ```
+**reproduce table**
 ```bash
-python -m in_virtuo_reinforce.evaluation.results_table_lead --results results/lead_optimization
+python -m in_virtuo_reinforce.evaluation.results_table_lead --results results/lead_optimization/sim_constraint
 ```
-
+### 4.b Without sim constraint:
+```bash
+ python -m in_virtuo_reinforce.ppo_docking --device 1 --start_t 0. --offspring_size 50 --seed 0 --max_oracle_calls 1000 --num_reinforce_steps 50 --clip_eps 0.5 --start_task 0 --experience_replay_size 100 --dt 0.01 --c_neg 1 --dt 0.01 --tot_offspring 100 --vocab_size 10 --num_timesteps 50 --no_sim_constraint
+```
+**reproduce table**
+```bash
+ python -m in_virtuo_reinforce.evaluation.results_table_lead --mode nosim --no_sim results/lead_optimization/no_sim_constraint
+```
 ## 📄 Citation
 
 After Unblinding
