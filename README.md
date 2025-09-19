@@ -277,7 +277,7 @@ python -m in_virtuo_reinforce.genetic_ppo --ckpt checkpoints/invirtuo_gen.ckpt -
 ```bash
 python -m in_virtuo_reinforce.evaluation.results_table_lead --results results/lead_optimization/sim_constraint
 ```
-### 4.b Without sim constraint:
+### 4.b Without Similarity Constraints:
 ```bash
  python -m in_virtuo_reinforce.ppo_docking --device 1 --start_t 0. --offspring_size 50 --seed 0 --max_oracle_calls 1000 --num_reinforce_steps 50 --clip_eps 0.5 --start_task 0 --experience_replay_size 100 --dt 0.01 --c_neg 1 --dt 0.01 --tot_offspring 100 --vocab_size 10 --num_timesteps 50 --no_sim_constraint
 ```
